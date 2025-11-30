@@ -4,8 +4,11 @@ const fetch = require('node-fetch');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const agentsConfig = require('./config/agents.config');
 
 const app = express();
+
+// Middleware
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use((req, res, next) => {
@@ -13,23 +16,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// LLM 제공자 설정 (ollama 또는 openai)
-// LLM Provider: 'ollama' for local Ollama server, 'openai' for OpenAI API
-const LLM_PROVIDER = process.env.LLM_PROVIDER || 'ollama';
-
-// Ollama 로컬 서버 설정
-// Ollama local server configuration
-const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'gpt-oss:20b';
-
-// OpenAI API 설정
-// OpenAI API configuration
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5';
-const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
-
 // 서버 포트
-// Server port
 const PORT = process.env.PORT || 3000;
 
 // Reports storage directory
@@ -38,34 +25,116 @@ if (!fs.existsSync(REPORTS_DIR)) {
   fs.mkdirSync(REPORTS_DIR, { recursive: true });
 }
 
-// Health check
-// 서버 상태 확인
-app.get('/health', (req, res) => {
+/**
+ * 에이전트 헬스체크 유틸리티
+ */
+async function checkAgentHealth(agentKey) {
+  const agent = agentsConfig.getAgent(agentKey);
+  if (!agent || !agent.enabled) {
+    return { ok: false, status: 'disabled', agent: agent?.name || agentKey };
+  }
+
+  try {
+    const url = agentsConfig.buildUrl(agentKey, 'health');
+    const response = await fetch(url, { 
+      timeout: 5000,
+      signal: AbortSignal.timeout(5000)
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      return { ok: true, status: 'healthy', agent: agent.name, data };
+    } else {
+      return { ok: false, status: 'unhealthy', agent: agent.name };
+    }
+  } catch (error) {
+    return { ok: false, status: 'unreachable', agent: agent.name, error: error.message };
+  }
+}
+
+/**
+ * Report Agent 호출 헬퍼
+ */
+async function callReportAgent(endpoint, body, isStreaming = false) {
+  const agent = agentsConfig.getAgent('report');
+  
+  if (!agent.enabled) {
+    throw new Error('Report Agent is disabled');
+  }
+
+  const url = agentsConfig.buildUrl('report', endpoint);
+  
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      timeout: agent.timeout
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Report Agent error (${response.status}): ${errorText}`);
+    }
+
+    return response;
+  } catch (error) {
+    if (error.code === 'ECONNREFUSED') {
+      throw new Error(
+        `Report Agent에 연결할 수 없습니다 (${agent.url}). ` +
+        `Report Agent가 실행 중인지 확인해주세요.`
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Health Check - 전체 시스템 상태
+ */
+app.get('/health', async (req, res) => {
+  const activeAgents = agentsConfig.getActiveAgents();
+  const agentStatuses = {};
+
+  // 각 활성 에이전트 헬스체크
+  for (const agent of activeAgents) {
+    agentStatuses[agent.key] = await checkAgentHealth(agent.key);
+  }
+
+  const allHealthy = Object.values(agentStatuses).every(s => s.ok);
+
   res.json({
-    ok: true,
-    mode: 'agent',
-    provider: LLM_PROVIDER,
-    model: LLM_PROVIDER === 'openai' ? OPENAI_MODEL : OLLAMA_MODEL,
-    host: LLM_PROVIDER === 'openai' ? 'OpenAI API' : OLLAMA_HOST
+    ok: allHealthy,
+    mode: 'orchestrator',
+    service: 'Main Backend (API Gateway)',
+    timestamp: new Date().toISOString(),
+    agents: agentStatuses,
+    reports_dir: REPORTS_DIR
   });
 });
 
-// Get available models
+/**
+ * GET /models
+ * 사용 가능한 모델 조회 (레거시 호환)
+ */
 app.get('/models', async (req, res) => {
   try {
-    if (LOCAL_LLM_PROVIDER === 'ollama') {
-      const resp = await fetch(`${OLLAMA_HOST.replace(/\/$/, '')}/api/tags`);
-      if (!resp.ok) throw new Error(`Ollama error ${resp.status}`);
-      const data = await resp.json();
-      
-      const models = (data.models || []).map(m => ({
-        id: m.name,
-        name: m.name,
-        size: m.size,
-        modified: m.modified_at
-      }));
-      
-      res.json({ models });
+    const reportAgent = agentsConfig.getAgent('report');
+    if (!reportAgent.enabled) {
+      return res.json({ models: [] });
+    }
+
+    // Report Agent의 LLM 설정 정보 반환
+    const healthCheck = await checkAgentHealth('report');
+    
+    if (healthCheck.ok && healthCheck.data) {
+      res.json({ 
+        models: [{
+          provider: healthCheck.data.provider,
+          model: healthCheck.data.model,
+          host: healthCheck.data.host
+        }]
+      });
     } else {
       res.json({ models: [] });
     }
@@ -75,7 +144,10 @@ app.get('/models', async (req, res) => {
   }
 });
 
-// Analyze chat conversation
+/**
+ * POST /analyze
+ * 대화 분석 (Report Agent에 위임)
+ */
 app.post('/analyze', async (req, res) => {
   try {
     const { messages, metadata } = req.body;
@@ -84,94 +156,25 @@ app.post('/analyze', async (req, res) => {
       return res.status(400).json({ error: 'messages array is required' });
     }
 
-    // Format conversation for analysis
-    const conversationText = messages.map((m, idx) => {
-      return `[${idx + 1}] ${m.role.toUpperCase()}: ${m.content}`;
-    }).join('\n\n');
+    console.log(`[Orchestrator] Forwarding analysis request to Report Agent (${messages.length} messages)`);
 
-    // Create analysis prompt
-    const analysisPrompt = `다음 대화를 분석하고 상세한 분석 결과를 JSON 형식으로 제공하세요.
+    const response = await callReportAgent('analyze', { messages, metadata });
+    const result = await response.json();
 
-대화 내용:
-${conversationText}
-
-다음 JSON 구조로 분석 결과를 작성하세요 (모든 텍스트는 한글로):
-{
-  "summary": "전체 대화에 대한 간략한 요약 (2-3문장)",
-  "main_topics": ["주제1", "주제2", ...],
-  "key_points": ["핵심 포인트1", "핵심 포인트2", ...],
-  "sentiment": "긍정적/부정적/중립적/복합적",
-  "participant_roles": {
-    "user": "사용자의 행동과 의도 설명",
-    "assistant": "상담사의 행동과 응답 방식 설명"
-  },
-  "conversation_flow": "대화가 어떻게 전개되었는지 설명",
-  "insights": ["통찰1", "통찰2", ...],
-  "statistics": {
-    "total_messages": 숫자,
-    "user_messages": 숫자,
-    "assistant_messages": 숫자,
-    "average_message_length": 숫자
-  }
-}
-
-반드시 유효한 JSON만 응답하고, 추가 텍스트는 포함하지 마세요.`;
-
-    // LLM을 호출하여 분석 수행
-    // Call LLM for analysis
-    const analysisResult = await callLLM(analysisPrompt);
-    
-    // JSON 응답 파싱
-    let analysis;
-    try {
-      // Extract JSON from response
-      const jsonMatch = analysisResult.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        analysis = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error('No JSON found in response');
-      }
-    } catch (parseError) {
-      console.error('Failed to parse LLM response as JSON:', parseError);
-      // Fallback: create basic analysis
-      analysis = {
-        summary: analysisResult.substring(0, 200),
-        main_topics: ['conversation analysis'],
-        key_points: ['Analysis completed'],
-        sentiment: 'neutral',
-        participant_roles: {
-          user: 'User participant',
-          assistant: 'AI assistant'
-        },
-        conversation_flow: 'Conversation analyzed',
-        insights: ['See full response for details'],
-        statistics: {
-          total_messages: messages.length,
-          user_messages: messages.filter(m => m.role === 'user').length,
-          assistant_messages: messages.filter(m => m.role === 'assistant').length,
-          average_message_length: Math.round(messages.reduce((sum, m) => sum + m.content.length, 0) / messages.length)
-        }
-      };
-    }
-
-    // 분석 메타데이터 추가
-    // Add analysis metadata
-    analysis.metadata = {
-      analyzed_at: new Date().toISOString(),
-      provider: LLM_PROVIDER,
-      model_used: LLM_PROVIDER === 'openai' ? OPENAI_MODEL : OLLAMA_MODEL,
-      ...metadata
-    };
-
-    res.json({ success: true, analysis });
+    res.json(result);
   } catch (err) {
-    console.error('Analysis error:', err);
-    res.status(500).json({ error: err.message || 'Analysis failed' });
+    console.error('[Orchestrator] Analysis error:', err);
+    res.status(500).json({ 
+      error: err.message || 'Analysis failed',
+      service: 'Main Backend'
+    });
   }
 });
 
-// Generate report from analysis
-// 분석 결과로부터 보고서 생성
+/**
+ * POST /generate-report
+ * 보고서 생성 (Report Agent에 위임)
+ */
 app.post('/generate-report', async (req, res) => {
   try {
     const { analysis, format = 'markdown' } = req.body;
@@ -180,70 +183,143 @@ app.post('/generate-report', async (req, res) => {
       return res.status(400).json({ error: 'analysis object is required' });
     }
 
-    const reportPrompt = `대화 분석 데이터를 기반으로 전문적이고 포괄적인 보고서를 작성하세요.
+    console.log('[Orchestrator] Forwarding report generation to Report Agent');
 
-분석 데이터:
-${JSON.stringify(analysis, null, 2)}
+    const response = await callReportAgent('generate', { analysis, format });
+    const result = await response.json();
 
-다음 섹션으로 구성된 상세한 보고서를 한글 Markdown 형식으로 작성하세요:
-1. 요약
-2. 대화 개요
-3. 주요 주제 및 테마
-4. 상세 분석
-5. 참여자 행동 분석
-6. 인사이트 및 관찰 사항
-7. 통계
-8. 권장 사항 (해당되는 경우)
+    // 보고서를 파일로 저장
+    if (result.success && result.report) {
+      const reportData = {
+        id: result.report.id,
+        created_at: result.report.created_at,
+        analysis,
+        content: result.report.content,
+        format
+      };
 
-보고서는 명확하고 전문적이며 실용적이어야 합니다. 제목, 목록, 표, 강조 등 적절한 Markdown 형식을 사용하세요.`;
+      const reportPath = path.join(REPORTS_DIR, `${result.report.id}.json`);
+      fs.writeFileSync(reportPath, JSON.stringify(reportData, null, 2));
+      console.log(`[Orchestrator] Report saved: ${result.report.id}`);
+    }
 
-    // LLM을 호출하여 보고서 생성
-    // Call LLM to generate report
-    const reportContent = await callLLM(reportPrompt);
-
-    // 보고서 저장
-    // Save report
-    const reportId = `report_${Date.now()}`;
-    const reportData = {
-      id: reportId,
-      created_at: new Date().toISOString(),
-      analysis,
-      content: reportContent,
-      format
-    };
-
-    const reportPath = path.join(REPORTS_DIR, `${reportId}.json`);
-    fs.writeFileSync(reportPath, JSON.stringify(reportData, null, 2));
-
-    res.json({ 
-      success: true, 
-      report: {
-        id: reportId,
-        content: reportContent,
-        created_at: reportData.created_at
-      }
-    });
+    res.json(result);
   } catch (err) {
-    console.error('Report generation error:', err);
-    res.status(500).json({ error: err.message || 'Report generation failed' });
+    console.error('[Orchestrator] Report generation error:', err);
+    res.status(500).json({ 
+      error: err.message || 'Report generation failed',
+      service: 'Main Backend'
+    });
   }
 });
 
-// Get list of reports
+/**
+ * POST /process
+ * 통합 프로세스: 분석 + 보고서 생성 (SSE 스트리밍)
+ */
+app.post('/process', async (req, res) => {
+  try {
+    const { messages, metadata } = req.body;
+    
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'messages array is required' });
+    }
+
+    console.log(`[Orchestrator] Starting process for ${messages.length} messages`);
+
+    // SSE 헤더 설정
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // Report Agent 호출
+    const response = await callReportAgent('process', { messages, metadata }, true);
+
+    // Report Agent의 SSE 스트림을 클라이언트로 전달
+    response.body.on('data', (chunk) => {
+      const chunkStr = chunk.toString();
+      
+      // SSE 데이터 파싱 및 보고서 저장 처리
+      if (chunkStr.includes('"step":5') || chunkStr.includes('"step": 5')) {
+        try {
+          const dataMatch = chunkStr.match(/data: ({.*})/);
+          if (dataMatch) {
+            const eventData = JSON.parse(dataMatch[1]);
+            
+            // 최종 결과에서 보고서 저장
+            if (eventData.data && eventData.data.success && eventData.data.reportId) {
+              const reportData = {
+                id: eventData.data.reportId,
+                created_at: eventData.data.created_at,
+                analysis: eventData.data.analysis,
+                content: eventData.data.report,
+                format: 'markdown',
+                messages: messages
+              };
+
+              const reportPath = path.join(REPORTS_DIR, `${eventData.data.reportId}.json`);
+              fs.writeFileSync(reportPath, JSON.stringify(reportData, null, 2));
+              console.log(`[Orchestrator] Report saved: ${eventData.data.reportId}`);
+            }
+          }
+        } catch (parseError) {
+          console.error('[Orchestrator] Error parsing SSE data:', parseError);
+        }
+      }
+
+      // 클라이언트로 전달
+      res.write(chunk);
+    });
+
+    response.body.on('end', () => {
+      console.log('[Orchestrator] Process completed');
+      res.end();
+    });
+
+    response.body.on('error', (err) => {
+      console.error('[Orchestrator] Stream error:', err);
+      res.end();
+    });
+
+  } catch (err) {
+    console.error('[Orchestrator] Process error:', err);
+    
+    const errorMessage = err.message || '처리 중 오류가 발생했습니다.';
+    
+    res.write(`data: ${JSON.stringify({ 
+      step: -1, 
+      message: 'Error', 
+      error: errorMessage,
+      service: 'Main Backend'
+    })}\n\n`);
+    res.end();
+  }
+});
+
+/**
+ * GET /reports
+ * 저장된 보고서 목록 조회
+ */
 app.get('/reports', (req, res) => {
   try {
     const files = fs.readdirSync(REPORTS_DIR);
     const reports = files
       .filter(f => f.endsWith('.json'))
       .map(f => {
-        const data = JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, f), 'utf-8'));
-        return {
-          id: data.id,
-          created_at: data.created_at,
-          summary: data.analysis?.summary || 'No summary',
-          topics: data.analysis?.main_topics || []
-        };
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, f), 'utf-8'));
+          return {
+            id: data.id,
+            created_at: data.created_at,
+            summary: data.analysis?.summary || 'No summary',
+            topics: data.analysis?.main_topics || []
+          };
+        } catch (err) {
+          console.error(`Error reading report ${f}:`, err);
+          return null;
+        }
       })
+      .filter(r => r !== null)
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
     res.json({ reports });
@@ -253,7 +329,10 @@ app.get('/reports', (req, res) => {
   }
 });
 
-// Get specific report
+/**
+ * GET /reports/:id
+ * 특정 보고서 조회
+ */
 app.get('/reports/:id', (req, res) => {
   try {
     const reportPath = path.join(REPORTS_DIR, `${req.params.id}.json`);
@@ -270,7 +349,10 @@ app.get('/reports/:id', (req, res) => {
   }
 });
 
-// Delete report
+/**
+ * DELETE /reports/:id
+ * 보고서 삭제
+ */
 app.delete('/reports/:id', (req, res) => {
   try {
     const reportPath = path.join(REPORTS_DIR, `${req.params.id}.json`);
@@ -280,6 +362,7 @@ app.delete('/reports/:id', (req, res) => {
     }
 
     fs.unlinkSync(reportPath);
+    console.log(`[Orchestrator] Report deleted: ${req.params.id}`);
     res.json({ success: true, message: 'Report deleted' });
   } catch (err) {
     console.error('Error deleting report:', err);
@@ -287,312 +370,66 @@ app.delete('/reports/:id', (req, res) => {
   }
 });
 
-// Process with streaming progress updates
-app.post('/process', async (req, res) => {
-  try {
-    const { messages, metadata } = req.body;
-    
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: 'messages array is required' });
-    }
-
-    // Set up SSE headers for streaming progress
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
-    const sendProgress = (step, message, data = null) => {
-      res.write(`data: ${JSON.stringify({ step, message, data })}\n\n`);
-    };
-
-    console.log(`Processing conversation with ${messages.length} messages...`);
-    const userMsgCount = messages.filter(m => m.role === 'user').length;
-    const assistantMsgCount = messages.filter(m => m.role === 'assistant').length;
-    
-    sendProgress(1, `대화 내용을 준비하고 있습니다... (고객 ${userMsgCount}개, 상담사 ${assistantMsgCount}개 메시지)`);
-
-    // Step 1: Analyze
-    const conversationText = messages.map((m, idx) => {
-      return `[${idx + 1}] ${m.role.toUpperCase()}: ${m.content}`;
-    }).join('\n\n');
-
-    const analysisPrompt = `다음 대화를 분석하고 상세한 분석 결과를 JSON 형식으로 제공하세요.
-
-대화 내용:
-${conversationText}
-
-다음 JSON 구조로 분석 결과를 작성하세요 (모든 텍스트는 한글로):
-{
-  "summary": "전체 대화에 대한 간략한 요약 (2-3문장)",
-  "main_topics": ["주제1", "주제2", ...],
-  "key_points": ["핵심 포인트1", "핵심 포인트2", ...],
-  "sentiment": "긍정적/부정적/중립적/복합적",
-  "participant_roles": {
-    "user": "사용자의 행동과 의도 설명",
-    "assistant": "상담사의 행동과 응답 방식 설명"
-  },
-  "conversation_flow": "대화가 어떻게 전개되었는지 설명",
-  "insights": ["통찰1", "통찰2", ...],
-  "statistics": {
-    "total_messages": ${messages.length},
-    "user_messages": ${messages.filter(m => m.role === 'user').length},
-    "assistant_messages": ${messages.filter(m => m.role === 'assistant').length},
-    "average_message_length": ${Math.round(messages.reduce((sum, m) => sum + m.content.length, 0) / messages.length)}
-  }
-}
-
-반드시 유효한 JSON만 응답하고, 추가 텍스트는 포함하지 마세요.`;
-
-    console.log('Step 2: Analyzing conversation...');
-    sendProgress(2, `AI가 대화를 분석하고 있습니다... (${LLM_PROVIDER === 'openai' ? 'OpenAI' : 'Ollama'} ${LLM_PROVIDER === 'openai' ? OPENAI_MODEL : OLLAMA_MODEL})`);
-    
-    // LLM을 호출하여 대화 분석
-    // Call LLM to analyze conversation
-    const analysisResult = await callLLM(analysisPrompt);
-    
-    let analysis;
-    try {
-      const jsonMatch = analysisResult.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        analysis = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error('No JSON found in response');
-      }
-    } catch (parseError) {
-      console.error('Failed to parse analysis:', parseError);
-      analysis = {
-        summary: 'Conversation analyzed',
-        main_topics: ['General conversation'],
-        key_points: ['Analysis completed'],
-        sentiment: 'neutral',
-        participant_roles: {
-          user: 'User participant',
-          assistant: 'AI assistant'
-        },
-        conversation_flow: 'Standard conversation flow',
-        insights: ['See details below'],
-        statistics: {
-          total_messages: messages.length,
-          user_messages: messages.filter(m => m.role === 'user').length,
-          assistant_messages: messages.filter(m => m.role === 'assistant').length,
-          average_message_length: Math.round(messages.reduce((sum, m) => sum + m.content.length, 0) / messages.length)
-        }
-      };
-    }
-
-    // 분석 메타데이터 추가
-    // Add analysis metadata
-    analysis.metadata = {
-      analyzed_at: new Date().toISOString(),
-      provider: LLM_PROVIDER,
-      model_used: LLM_PROVIDER === 'openai' ? OPENAI_MODEL : OLLAMA_MODEL,
-      ...metadata
-    };
-
-    console.log('Analysis completed successfully');
-    sendProgress(3, `분석 완료! 주요 주제: ${analysis.main_topics?.slice(0, 2).join(', ') || '대화 분석'}... 이제 보고서를 생성합니다.`, { analysis });
-
-    // Step 3: Generate Report
-    // 3단계: 보고서 생성
-    console.log('Step 3: Generating report...');
-    const reportPrompt = `대화 분석 데이터를 기반으로 전문적이고 포괄적인 보고서를 작성하세요.
-
-분석 데이터:
-${JSON.stringify(analysis, null, 2)}
-
-다음 섹션으로 구성된 상세한 보고서를 한글 Markdown 형식으로 작성하세요:
-1. 요약
-2. 대화 개요
-3. 주요 주제 및 테마
-4. 상세 분석
-5. 참여자 행동 분석
-6. 인사이트 및 관찰 사항
-7. 통계
-8. 권장 사항 (해당되는 경우)
-
-보고서는 명확하고 전문적이며 실용적이어야 합니다. 제목, 목록, 표, 강조 등 적절한 Markdown 형식을 사용하세요.`;
-
-    // LLM을 호출하여 보고서 생성
-    // Call LLM to generate report
-    const reportContent = await callLLM(reportPrompt);
-    
-    console.log('Report generated successfully');
-    sendProgress(4, '보고서 생성 완료! 데이터베이스에 저장하고 있습니다...');
-
-    // 보고서 저장
-    // Save report
-    const reportId = `report_${Date.now()}`;
-    const reportData = {
-      id: reportId,
-      created_at: new Date().toISOString(),
-      analysis,
-      content: reportContent,
-      format: 'markdown',
-      messages: messages // Store original messages
-    };
-
-    const reportPath = path.join(REPORTS_DIR, `${reportId}.json`);
-    fs.writeFileSync(reportPath, JSON.stringify(reportData, null, 2));
-
-    console.log(`Report saved successfully: ${reportId}`);
-
-    // Send final result
-    sendProgress(5, `✅ 보고서 생성 완료! (ID: ${reportId.substring(7, 17)}...)`, {
-      success: true,
-      reportId,
-      analysis,
-      report: reportContent,
-      created_at: reportData.created_at
-    });
-
-    res.end();
-  } catch (err) {
-    console.error('Process error:', err);
-    
-    let errorMessage = '보고서 생성 중 오류가 발생했습니다.';
-    
-    if (err.message.includes('fetch')) {
-      errorMessage = 'LLM 서버에 연결할 수 없습니다. Ollama 또는 OpenAI 설정을 확인해주세요.';
-    } else if (err.message.includes('timeout')) {
-      errorMessage = '요청 시간이 초과되었습니다. 다시 시도해주세요.';
-    } else if (err.message.includes('JSON')) {
-      errorMessage = 'LLM 응답을 처리하는 중 오류가 발생했습니다.';
-    } else {
-      errorMessage = err.message || errorMessage;
-    }
-    
-    res.write(`data: ${JSON.stringify({ 
-      step: -1, 
-      message: 'Error', 
-      error: errorMessage,
-      details: err.stack 
-    })}\n\n`);
-    res.end();
-  }
+/**
+ * 404 핸들러
+ */
+app.use((req, res) => {
+  res.status(404).json({
+    error: 'Endpoint not found',
+    service: 'Main Backend',
+    available_endpoints: [
+      'GET /health',
+      'GET /models',
+      'POST /analyze',
+      'POST /generate-report',
+      'POST /process',
+      'GET /reports',
+      'GET /reports/:id',
+      'DELETE /reports/:id'
+    ]
+  });
 });
 
 /**
- * LLM 호출 헬퍼 함수
- * Call LLM helper function
- * 
- * @param {string} prompt - 전송할 프롬프트 / Prompt to send
- * @param {string} model - 사용할 모델 (선택사항) / Model to use (optional)
- * @returns {Promise<string>} LLM 응답 / LLM response
+ * 에러 핸들러
  */
-async function callLLM(prompt, model = null) {
-  try {
-    // OpenAI API 사용
-    // Use OpenAI API
-    if (LLM_PROVIDER === 'openai') {
-      if (!OPENAI_API_KEY) {
-        throw new Error('OPENAI_API_KEY가 설정되지 않았습니다. 환경변수를 확인해주세요.');
-      }
-
-      console.log(`Calling OpenAI API with model: ${model || OPENAI_MODEL}`);
-      
-      const resp = await fetch(OPENAI_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${OPENAI_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: model || OPENAI_MODEL,
-          messages: [
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          temperature: 0.7,
-          max_tokens: 4096
-        })
-      });
-
-      if (!resp.ok) {
-        const errorText = await resp.text();
-        console.error('OpenAI API error:', errorText);
-        throw new Error(`OpenAI API 오류 (${resp.status}): ${errorText.substring(0, 200)}`);
-      }
-
-      const data = await resp.json();
-      const content = data.choices?.[0]?.message?.content || '';
-      
-      if (!content) {
-        throw new Error('OpenAI API로부터 응답을 받지 못했습니다.');
-      }
-      
-      return content;
-    } 
-    // Ollama 로컬 서버 사용
-    // Use Ollama local server
-    else {
-      console.log(`Calling Ollama with model: ${model || OLLAMA_MODEL}`);
-      
-      const resp = await fetch(`${OLLAMA_HOST.replace(/\/$/, '')}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: model || OLLAMA_MODEL,
-          prompt: prompt,
-          stream: false,
-          options: {
-            temperature: 0.7,
-            num_predict: 4096
-          }
-        })
-      });
-
-      if (!resp.ok) {
-        const errorText = await resp.text();
-        console.error('Ollama error:', errorText);
-        
-        if (resp.status === 404) {
-          throw new Error(`Ollama 모델 '${model || OLLAMA_MODEL}'을 찾을 수 없습니다. 모델이 설치되어 있는지 확인해주세요.`);
-        }
-        
-        throw new Error(`Ollama 오류 (${resp.status}): ${errorText.substring(0, 200)}`);
-      }
-
-      const data = await resp.json();
-      const content = data.response || '';
-      
-      if (!content) {
-        throw new Error('Ollama로부터 응답을 받지 못했습니다.');
-      }
-      
-      return content;
-    }
-  } catch (err) {
-    console.error('LLM call error:', err);
-    
-    // Provide more user-friendly error messages
-    if (err.code === 'ECONNREFUSED') {
-      throw new Error(`LLM 서버에 연결할 수 없습니다. ${LLM_PROVIDER === 'openai' ? 'OpenAI API' : `Ollama (${OLLAMA_HOST})`}가 실행 중인지 확인해주세요.`);
-    } else if (err.code === 'ETIMEDOUT' || err.message.includes('timeout')) {
-      throw new Error('요청 시간이 초과되었습니다. 네트워크 연결을 확인하거나 다시 시도해주세요.');
-    }
-    
-    throw err;
-  }
-}
-
-// 서버 시작
-// Start server
-app.listen(PORT, () => {
-  console.log(`\n=== Agent Backend Started ===`);
-  console.log(`Server: http://localhost:${PORT}`);
-  console.log(`Mode: Agent (Conversation Analysis & Report Generation)`);
-  console.log(`LLM Provider: ${LLM_PROVIDER}`);
-  
-  if (LLM_PROVIDER === 'openai') {
-    console.log(`OpenAI Model: ${OPENAI_MODEL}`);
-    console.log(`API Key: ${OPENAI_API_KEY ? '✓ Configured' : '✗ Missing'}`);
-  } else {
-    console.log(`Ollama Host: ${OLLAMA_HOST}`);
-    console.log(`Ollama Model: ${OLLAMA_MODEL}`);
-  }
-  
-  console.log(`Reports Directory: ${REPORTS_DIR}`);
-  console.log(`=============================\n`);
+app.use((err, req, res, next) => {
+  console.error('[Orchestrator] Unhandled error:', err);
+  res.status(500).json({
+    error: 'Internal server error',
+    service: 'Main Backend',
+    message: err.message
+  });
 });
+
+/**
+ * 서버 시작
+ */
+app.listen(PORT, async () => {
+  console.log('\n=== AiDam Main Backend (Orchestrator) Started ===');
+  console.log(`Server: http://localhost:${PORT}`);
+  console.log(`Mode: Orchestrator (API Gateway)`);
+  console.log(`Reports Directory: ${REPORTS_DIR}`);
+  console.log('\n📡 Checking Agent Status...');
+  
+  const activeAgents = agentsConfig.getActiveAgents();
+  
+  for (const agent of activeAgents) {
+    const health = await checkAgentHealth(agent.key);
+    const statusIcon = health.ok ? '✅' : '❌';
+    console.log(`${statusIcon} ${agent.name} (${agent.url}): ${health.status}`);
+  }
+  
+  console.log('\n📋 Available Endpoints:');
+  console.log('  - GET  /health           (System health check)');
+  console.log('  - GET  /models           (Available LLM models)');
+  console.log('  - POST /analyze          (Analyze conversation)');
+  console.log('  - POST /generate-report  (Generate report)');
+  console.log('  - POST /process          (Full analysis + report)');
+  console.log('  - GET  /reports          (List all reports)');
+  console.log('  - GET  /reports/:id      (Get specific report)');
+  console.log('  - DELETE /reports/:id    (Delete report)');
+  console.log('================================================\n');
+});
+
+module.exports = app;

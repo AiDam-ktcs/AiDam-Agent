@@ -1,17 +1,32 @@
 {
   "name": "aidam-backend",
-  "version": "0.1.0",
-  "main": "index.js",
+  "version": "1.0.0",
+  "description": "AiDam Backend - Microservices Architecture",
+  "main": "agent.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node agent.js",
+    "dev": "nodemon agent.js",
+    "test": "node test-agent.js",
     "agent": "node agent.js",
-    "dev": "nodemon index.js",
-    "test-agent": "node test-agent.js"
+    "report-agent": "cd agents/report-agent && npm start",
+    "install-all": "npm install && cd agents/report-agent && npm install"
   },
+  "keywords": [
+    "aidam",
+    "agent",
+    "orchestrator",
+    "microservices",
+    "llm"
+  ],
+  "author": "AiDam Team",
+  "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "node-fetch": "^2.6.7",
     "dotenv": "^16.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
   }
 }
