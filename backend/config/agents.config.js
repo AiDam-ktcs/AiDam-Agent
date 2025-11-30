@@ -32,14 +32,13 @@ module.exports = {
     },
     rag: {
       name: 'RAG Agent',
-      url: process.env.RAG_AGENT_URL || 'http://localhost:8003',
-      enabled: false, // 향후 추가
-      description: 'RAG 기반 스크립트 제안',
+      url: process.env.RAG_AGENT_URL || 'http://localhost:8000',
+      enabled: process.env.RAG_AGENT_ENABLED !== 'false',
+      description: 'RAG 기반 상담 가이드 제공 (FastAPI)',
       timeout: 30000,
       endpoints: {
-        health: '/health',
-        search: '/search',
-        recommend: '/recommend'
+        health: '/',
+        chat: '/chat'
       }
     }
   },

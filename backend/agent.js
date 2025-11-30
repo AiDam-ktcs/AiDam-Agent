@@ -371,6 +371,72 @@ app.delete('/reports/:id', (req, res) => {
 });
 
 /**
+ * POST /rag/chat
+ * RAG 기반 상담 가이드 (RAG Agent에 위임)
+ */
+app.post('/rag/chat', async (req, res) => {
+  try {
+    const { message, history } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({ error: 'message is required' });
+    }
+
+    // RAG Agent 헬스체크
+    const ragAgentHealth = await checkAgentHealth('rag');
+    
+    if (!ragAgentHealth.ok) {
+      return res.status(503).json({ 
+        error: 'RAG Agent is not available',
+        detail: 'RAG Agent가 실행 중이지 않습니다. 상담 가이드 기능을 사용할 수 없습니다.',
+        service: 'Main Backend'
+      });
+    }
+
+    console.log(`[Orchestrator] Forwarding chat request to RAG Agent: ${message}`);
+
+    const ragAgent = agentsConfig.getAgent('rag');
+    const url = agentsConfig.buildUrl('rag', 'chat');
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: message,
+        history: history || []
+      }),
+      timeout: ragAgent.timeout
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`RAG Agent error (${response.status}): ${errorText}`);
+    }
+
+    const result = await response.json();
+    
+    console.log(`[Orchestrator] RAG Agent response received`);
+    res.json(result);
+
+  } catch (err) {
+    console.error('[Orchestrator] RAG chat error:', err);
+    
+    if (err.code === 'ECONNREFUSED') {
+      return res.status(503).json({ 
+        error: 'RAG Agent에 연결할 수 없습니다.',
+        detail: 'RAG Agent가 실행 중인지 확인해주세요 (포트 8000).',
+        service: 'Main Backend'
+      });
+    }
+    
+    res.status(500).json({ 
+      error: err.message || 'RAG chat failed',
+      service: 'Main Backend'
+    });
+  }
+});
+
+/**
  * 404 핸들러
  */
 app.use((req, res) => {
@@ -385,7 +451,8 @@ app.use((req, res) => {
       'POST /process',
       'GET /reports',
       'GET /reports/:id',
-      'DELETE /reports/:id'
+      'DELETE /reports/:id',
+      'POST /rag/chat'
     ]
   });
 });
@@ -429,6 +496,7 @@ app.listen(PORT, async () => {
   console.log('  - GET  /reports          (List all reports)');
   console.log('  - GET  /reports/:id      (Get specific report)');
   console.log('  - DELETE /reports/:id    (Delete report)');
+  console.log('  - POST /rag/chat         (RAG-based guide)');
   console.log('================================================\n');
 });
 

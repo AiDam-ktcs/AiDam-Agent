@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import RAGAssistant from './RAGAssistant'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 
@@ -378,26 +379,9 @@ export default function AgentDashboard() {
               )}
             </div>
 
-            {/* 가운데: AI 실시간 분석 (향후 구현) */}
+            {/* 가운데: RAG 기반 AI 상담 가이드 */}
             <div className="center-panel ai-assistant-panel">
-              <div className="panel-header">
-                <h2>AI 어시스턴트</h2>
-              </div>
-              
-              <div className="ai-content">
-                <div className="ai-placeholder">
-                  <div className="placeholder-icon">🔮</div>
-                  <h3>실시간 AI 분석</h3>
-                  <p>통화 중 실시간으로:</p>
-                  <ul className="feature-list">
-                    <li>핵심 키워드 추출</li>
-                    <li>추천 응답 제시 (RAG)</li>
-                    <li>스크립트 가이드</li>
-                    <li>즉각적인 반응</li>
-                  </ul>
-                  <p className="coming-soon">Coming Soon...</p>
-                </div>
-              </div>
+              <RAGAssistant messages={messages} />
             </div>
 
             {/* 우측: 보고서 */}

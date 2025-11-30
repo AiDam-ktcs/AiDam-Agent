@@ -50,16 +50,22 @@ npm start    # 포트 3000에서 시작
 
 **방법 2: 마이크로서비스 모드 (선택사항)**
 ```bash
-# 터미널 1: Report Agent
+# 터미널 1: Report Agent (대화 분석)
 cd backend/agents/report-agent
 npm install
 npm start    # 포트 8001
 
-# 터미널 2: 메인 백엔드
+# 터미널 2: RAG Agent (상담 가이드) - Python
+cd backend/agents/rag-agent
+pip install -r requirements.txt
+# .env 파일 생성 후 OPENAI_API_KEY 설정 필요
+uvicorn main:app --host 0.0.0.0 --port 8000
+
+# 터미널 3: 메인 백엔드
 cd backend
 npm start    # 포트 3000
 ```
-→ Report Agent를 별도 서비스로 실행 (확장성 향상)
+→ 각 에이전트를 별도 서비스로 실행 (확장성 향상)
 
 ### 3. 프론트엔드 실행
 
@@ -82,13 +88,22 @@ AiDam-Agent/
 │   ├── reports/                   # 생성된 보고서 저장 디렉토리
 │   │   └── *.json                 # 분석 보고서 JSON 파일
 │   ├── agents/                    # 마이크로서비스 에이전트들
-│   │   └── report-agent/          # Report Agent (대화 분석)
-│   │       ├── server.js          # Report Agent API 서버 (포트 8001)
-│   │       ├── .env               # Report Agent 환경 변수
-│   │       ├── package.json       # Report Agent 의존성
-│   │       └── services/
-│   │           ├── analyzer.js    # 대화 분석 로직
-│   │           └── reporter.js    # 보고서 생성 로직
+│   │   ├── report-agent/          # Report Agent (대화 분석, Node.js)
+│   │   │   ├── server.js          # Report Agent API 서버 (포트 8001)
+│   │   │   ├── .env               # Report Agent 환경 변수
+│   │   │   ├── package.json       # Report Agent 의존성
+│   │   │   └── services/
+│   │   │       ├── analyzer.js    # 대화 분석 로직
+│   │   │       └── reporter.js    # 보고서 생성 로직
+│   │   └── rag-agent/             # RAG Agent (상담 가이드, Python)
+│   │       ├── main.py            # FastAPI 메인 서버 (포트 8000)
+│   │       ├── requirements.txt   # Python 의존성
+│   │       ├── .env               # RAG Agent 환경 변수
+│   │       ├── models/            # 데이터 모델
+│   │       │   └── state.py
+│   │       └── rag/               # RAG 로직
+│   │           ├── loader.py      # PDF 로더
+│   │           └── graph.py       # LangGraph 플로우
 │   ├── shared/                    # 공통 모듈
 │   │   ├── llm-client.js          # LLM 호출 공통 로직
 │   │   └── schemas.js             # API 스키마 정의
@@ -114,14 +129,19 @@ AiDam-Agent/
 
 **아키텍처:**
 ```
-Frontend (5173) → Main Backend (3000) → Report Agent (8001, 선택사항) → LLM (Ollama)
+                                    ┌─> Report Agent (8001) → LLM (Ollama)
+                                    │   (대화 분석/보고서)
+Frontend (5173) → Main Backend (3000)
+                                    │   
+                                    └─> RAG Agent (8000) → OpenAI
+                                        (상담 가이드, Python/FastAPI)
                          ↓
                   reports/ (파일 저장)
 ```
 
 **투트랙 방식:**
-- Report Agent 있으면 → 마이크로서비스 모드
-- Report Agent 없으면 → 폴백 모드 (메인 백엔드에서 직접 처리)
+- **Report Agent**: 있으면 마이크로서비스 모드 / 없으면 폴백 모드
+- **RAG Agent**: 있으면 상담 가이드 기능 활성화 / 없으면 비활성화
 
 - **[Menu2 API 명세서](./docs/Menu2API.md)**: 대시보드 및 통계 API 명세
 - **[Menu3 API 명세서](./docs/Menu3API.md)**: 전환서비스추천 시스템 API 명세
@@ -257,12 +277,12 @@ Frontend (5173) → Main Backend (3000) → Report Agent (8001, 선택사항) �
 - 🔨 **가운데 패널**: AI 실시간 어시스턴트 (키워드 추출, RAG 기반 스크립트 제안)
 - ✅ **우측 패널**: 상담 보고서 (수동 생성 버튼 방식)
 
-### 2. 🎯 실시간 AI 어시스턴트 (예정)
-- 📋 **STT 연동**: 음성을 텍스트로 실시간 변환하여 좌측 채팅에 표시
-- 📋 **키워드 추출**: 대화 중 핵심 키워드 즉시 추출
-- 📋 **RAG 기반 제안**: 사전 등록된 스크립트 데이터에서 적절한 응답 검색 및 제시
-- 📋 **LLM 답변 생성**: 실시간으로 상담사에게 추천 답변 제공
-- 📋 **즉각적 인사이트**: 통화 중 고객 감정 및 상황 분석
+### 2. 🎯 실시간 AI 어시스턴트
+- 📋 **STT 연동**: 음성을 텍스트로 실시간 변환하여 좌측 채팅에 표시 (예정)
+- 📋 **키워드 추출**: 대화 중 핵심 키워드 즉시 추출 (예정)
+- ✅ **RAG 기반 상담 가이드**: 내부 매뉴얼 PDF를 기반으로 상담 가이드 제공 (Python FastAPI)
+- 📋 **LLM 답변 생성**: 실시간으로 상담사에게 추천 답변 제공 (예정)
+- 📋 **즉각적 인사이트**: 통화 중 고객 감정 및 상황 분석 (예정)
 
 ### 3. 📊 상담 보고서 시스템
 - ✅ **수동 생성**: "보고서 생성" 버튼 클릭 시 분석 시작
@@ -293,9 +313,9 @@ Frontend (5173) → Main Backend (3000) → Report Agent (8001, 선택사항) �
 - 📋 **상담사 성과**: 개별 상담사별 품질 평가
 - 📋 **실시간 모니터링**: 현재 진행 중인 상담 현황
 
-### 8. 🤖 LLM 프로바이더
-- ✅ **Ollama 지원**: 로컬 LLM 서버 (gpt-oss:20b)
-- ✅ **OpenAI 지원**: 클라우드 API (gpt-4)
+### 8. 🤖 LLM 프로바이더 (다중 지원)
+- ✅ **Ollama** (Report Agent용): 로컬 LLM 서버 (gpt-oss:20b) - 대화 분석 및 보고서
+- ✅ **OpenAI** (RAG Agent용): 클라우드 API (gpt-4o-mini) - RAG 기반 상담 가이드
 - ✅ **한글 프롬프트**: 모든 분석을 한국어로 수행
 - ✅ **환경 변수 전환**: .env 파일로 프로바이더 선택
 

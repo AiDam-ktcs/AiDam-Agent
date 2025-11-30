@@ -1,4 +1,6 @@
+# ========================================
 # Node.js
+# ========================================
 node_modules/
 
 # Frontend/Backend node_modules
@@ -10,10 +12,97 @@ dist/
 build/
 .vite/
 
-# Environment files
+# ========================================
+# Python
+# ========================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Python virtual environments
+venv/
+env/
+ENV/
+.venv/
+.ENV/
+backend/agents/rag-agent/venv/
+backend/agents/rag-agent/.venv/
+
+# Python distribution / packaging
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.manifest
+*.spec
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
 .env
 .env.local
 .env.*.local
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
 
 # Logs
 logs/
@@ -40,5 +129,22 @@ Thumbs.db
 # Swap
 *.swp
 
-# reports
+# ========================================
+# Project Specific
+# ========================================
+# Reports directory
 reports/
+
+# Vector store (FAISS)
+*.faiss
+*.pkl
+*.index
+
+# Large model files (if any)
+*.bin
+*.pt
+*.pth
+*.safetensors
+
+# PDF files (if not needed in repo)
+# 내부_상담_메뉴얼.pdf
