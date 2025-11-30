@@ -6,6 +6,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, END
 from dotenv import load_dotenv
 
+# 경로 변경: 통합 프로젝트 구조에 맞춰서
+#from backend.models.state import CallState
+#from backend.rag.loader import PDFRAGLoader
 from models.state import CallState
 from rag.loader import PDFRAGLoader
 
