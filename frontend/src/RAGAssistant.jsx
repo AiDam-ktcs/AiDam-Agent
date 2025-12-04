@@ -27,6 +27,7 @@ export default function RAGAssistant({ messages: conversationMessages }) {
   const [previewData, setPreviewData] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [searchCache, setSearchCache] = useState({})
+  const [expandedSources, setExpandedSources] = useState({}) // 확장/축소 상태
   const messagesEndRef = useRef(null)
   const hoverTimeoutRef = useRef(null)
   const leaveTimeoutRef = useRef(null)
@@ -106,6 +107,16 @@ export default function RAGAssistant({ messages: conversationMessages }) {
   const clearChat = () => {
     setRagMessages([])
     setHistory([])
+    setExpandedSources({}) // 확장 상태도 초기화
+  }
+
+  // 출처 확장/축소 토글
+  const toggleSource = (msgIdx, sourceIdx) => {
+    const key = `${msgIdx}-${sourceIdx}`
+    setExpandedSources(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }))
   }
 
   // 키워드 호버 시 매뉴얼 내용 프리뷰
@@ -336,17 +347,31 @@ export default function RAGAssistant({ messages: conversationMessages }) {
               {msg.sources && msg.sources.length > 0 && (
                 <div className="rag-message-sources">
                   <div className="rag-sources-title">📚 참고 매뉴얼</div>
-                  {msg.sources.map((source, sourceIdx) => (
-                    <div key={sourceIdx} className="rag-source-item">
-                      <span className="rag-source-preview">
-                        {source.content.substring(0, 100)}
-                        {source.content.length > 100 && '...'}
-                      </span>
-                      {source.page && source.page !== 'N/A' && (
-                        <span className="rag-source-page">p.{source.page}</span>
-                      )}
-                    </div>
-                  ))}
+                  {msg.sources.map((source, sourceIdx) => {
+                    const sourceKey = `${idx}-${sourceIdx}`
+                    const isExpanded = expandedSources[sourceKey]
+                    
+                    return (
+                      <div key={sourceIdx} className="rag-source-item">
+                        <div className="rag-source-content-wrapper">
+                          <span className={`rag-source-preview ${isExpanded ? 'expanded' : 'collapsed'}`}>
+                            {source.content}
+                          </span>
+                          <div className="rag-source-footer">
+                            {source.page && source.page !== 'N/A' && (
+                              <span className="rag-source-page">p.{source.page}</span>
+                            )}
+                            <button 
+                              className="rag-source-toggle"
+                              onClick={() => toggleSource(idx, sourceIdx)}
+                            >
+                              {isExpanded ? '접기 ▲' : '더보기 ▼'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
