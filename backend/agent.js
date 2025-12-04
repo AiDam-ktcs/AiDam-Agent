@@ -437,6 +437,72 @@ app.post('/rag/chat', async (req, res) => {
 });
 
 /**
+ * POST /rag/search
+ * RAG 검색 전용 (빠른 매뉴얼 검색, LLM 답변 생성 없음)
+ */
+app.post('/rag/search', async (req, res) => {
+  try {
+    const { query, k = 3 } = req.body;
+    
+    if (!query) {
+      return res.status(400).json({ error: 'query is required' });
+    }
+
+    // RAG Agent 헬스체크
+    const ragAgentHealth = await checkAgentHealth('rag');
+    
+    if (!ragAgentHealth.ok) {
+      return res.status(503).json({ 
+        error: 'RAG Agent is not available',
+        detail: 'RAG Agent가 실행 중이지 않습니다.',
+        service: 'Main Backend'
+      });
+    }
+
+    console.log(`[Orchestrator] Forwarding search request to RAG Agent: ${query}`);
+
+    const ragAgent = agentsConfig.getAgent('rag');
+    const url = agentsConfig.buildUrl('rag', 'search');
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: query,
+        k: k
+      }),
+      timeout: ragAgent.timeout
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`RAG Agent error (${response.status}): ${errorText}`);
+    }
+
+    const result = await response.json();
+    
+    console.log(`[Orchestrator] RAG Agent search response received`);
+    res.json(result);
+
+  } catch (err) {
+    console.error('[Orchestrator] RAG search error:', err);
+    
+    if (err.code === 'ECONNREFUSED') {
+      return res.status(503).json({ 
+        error: 'RAG Agent에 연결할 수 없습니다.',
+        detail: 'RAG Agent가 실행 중인지 확인해주세요 (포트 8000).',
+        service: 'Main Backend'
+      });
+    }
+    
+    res.status(500).json({ 
+      error: err.message || 'RAG search failed',
+      service: 'Main Backend'
+    });
+  }
+});
+
+/**
  * 404 핸들러
  */
 app.use((req, res) => {
@@ -452,7 +518,8 @@ app.use((req, res) => {
       'GET /reports',
       'GET /reports/:id',
       'DELETE /reports/:id',
-      'POST /rag/chat'
+      'POST /rag/chat',
+      'POST /rag/search'
     ]
   });
 });
