@@ -3,8 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const { analyzeConversation } = require('./services/analyzer');
 const { generateReport, createReportMetadata } = require('./services/reporter');
-const { getConfig } = require('../../shared/llm-client');
-const { validateMessages } = require('../../shared/schemas');
+const { getConfig } = require('./services/llm-client');
+const { validateMessages } = require('./services/schemas');
 
 const app = express();
 

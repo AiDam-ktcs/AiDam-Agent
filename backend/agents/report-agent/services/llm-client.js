@@ -6,16 +6,16 @@ const fetch = require('node-fetch');
  * Ollama와 OpenAI를 지원하는 통합 LLM 호출 인터페이스
  */
 
-// LLM 제공자 설정
-const LLM_PROVIDER = process.env.LLM_PROVIDER || 'ollama';
+// LLM 제공자 설정 (환경변수로 관리)
+const LLM_PROVIDER = process.env.LLM_PROVIDER;
 
-// Ollama 설정
+// Ollama 설정 (환경변수)
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'gpt-oss:20b';
 
-// OpenAI 설정
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4';
+// OpenAI 설정 (환경변수) - API 키는 반드시 .env에서 설정
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_MODEL = process.env.OPENAI_MODEL;
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 
 /**
@@ -69,25 +69,41 @@ async function callOpenAI(prompt, options) {
     throw new Error('OPENAI_API_KEY가 설정되지 않았습니다. 환경변수를 확인해주세요.');
   }
 
-  console.log(`Calling OpenAI API with model: ${model || OPENAI_MODEL}`);
+  const modelName = model || OPENAI_MODEL;
+  console.log(`Calling OpenAI API with model: ${modelName}`);
   
+  // 새로운 모델들 (o1, o3, gpt-5 등)은 max_completion_tokens 사용
+  const isNewModel = modelName.startsWith('o1') || 
+                     modelName.startsWith('o3') || 
+                     modelName.includes('gpt-5');
+  
+  const requestBody = {
+    model: modelName,
+    messages: [
+      {
+        role: 'user',
+        content: prompt
+      }
+    ]
+  };
+
+  // 모델에 따라 파라미터 설정
+  if (isNewModel) {
+    // 새 모델: max_completion_tokens 사용, temperature 미지원
+    requestBody.max_completion_tokens = maxTokens;
+  } else {
+    // 기존 모델: max_tokens, temperature 사용
+    requestBody.max_tokens = maxTokens;
+    requestBody.temperature = temperature;
+  }
+
   const resp = await fetch(OPENAI_API_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${OPENAI_API_KEY}`
     },
-    body: JSON.stringify({
-      model: model || OPENAI_MODEL,
-      messages: [
-        {
-          role: 'user',
-          content: prompt
-        }
-      ],
-      temperature,
-      max_tokens: maxTokens
-    })
+    body: JSON.stringify(requestBody)
   });
 
   if (!resp.ok) {
@@ -97,9 +113,43 @@ async function callOpenAI(prompt, options) {
   }
 
   const data = await resp.json();
-  const content = data.choices?.[0]?.message?.content || '';
+  
+  // 디버깅: 응답 구조 로깅
+  console.log('OpenAI API response structure:', JSON.stringify({
+    id: data.id,
+    model: data.model,
+    choices_length: data.choices?.length,
+    first_choice: data.choices?.[0] ? {
+      finish_reason: data.choices[0].finish_reason,
+      message_role: data.choices[0].message?.role,
+      content_length: data.choices[0].message?.content?.length
+    } : null
+  }, null, 2));
+  
+  // 응답에서 content 추출 (여러 형식 지원)
+  let content = '';
+  
+  if (data.choices && data.choices.length > 0) {
+    const choice = data.choices[0];
+    // 일반적인 형식
+    content = choice.message?.content || '';
+    // 일부 모델은 text 필드 사용
+    if (!content && choice.text) {
+      content = choice.text;
+    }
+    // delta 형식 (스트리밍 응답의 일부)
+    if (!content && choice.delta?.content) {
+      content = choice.delta.content;
+    }
+  }
+  
+  // output 필드 확인 (일부 새 모델)
+  if (!content && data.output) {
+    content = typeof data.output === 'string' ? data.output : JSON.stringify(data.output);
+  }
   
   if (!content) {
+    console.error('OpenAI API 전체 응답:', JSON.stringify(data, null, 2));
     throw new Error('OpenAI API로부터 응답을 받지 못했습니다.');
   }
   

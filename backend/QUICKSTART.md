@@ -8,21 +8,19 @@
 # 루트 디렉토리에서
 cd backend
 
-# 모든 서비스의 의존성 한번에 설치
+# 1. 의존성 설치 (최초 1회)
 npm run install-all
-```
 
-또는 개별 설치:
+# 2. Report Agent 실행
+npm run report-agent
+# 또는
+cd agents/report-agent && npm start
 
-```bash
-# 메인 백엔드
-npm install
+# 3. 메인 백엔드 실행 (원래 명령어)
+npm run agent
 
-# Report Agent
-cd agents/report-agent
-npm install
-cd ../..
-```
+# 4. 프론트엔드 실행
+cd ../frontend && npm run dev
 
 ### 2단계: 환경 변수 설정
 

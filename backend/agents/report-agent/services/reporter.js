@@ -1,4 +1,4 @@
-const { callLLM } = require('../../../shared/llm-client');
+const { callLLM } = require('./llm-client');
 
 /**
  * 보고서 생성 서비스

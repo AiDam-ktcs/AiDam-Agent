@@ -1,5 +1,5 @@
-const { callLLM } = require('../../../shared/llm-client');
-const { formatConversation, calculateStatistics, extractJSON } = require('../../../shared/schemas');
+const { callLLM } = require('./llm-client');
+const { formatConversation, calculateStatistics, extractJSON } = require('./schemas');
 
 /**
  * 대화 분석 서비스
