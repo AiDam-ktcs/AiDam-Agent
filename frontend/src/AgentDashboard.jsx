@@ -15,8 +15,33 @@ export default function AgentDashboard() {
   const [reports, setReports] = useState([])
   const [selectedReportId, setSelectedReportId] = useState(null)
   const [autoAnalyze, setAutoAnalyze] = useState(true)
-  const [callStatus, setCallStatus] = useState('idle') // 'idle', 'ringing', 'active', 'ended'
-  const [currentPhoneNumber, setCurrentPhoneNumber] = useState('010-1234-5678') // 현재 통화 중인 고객 번호
+  const [callStatus, setCallStatus] = useState('active') // 'idle', 'ringing', 'active', 'ended'
+  const [currentPhoneNumber, setCurrentPhoneNumber] = useState('010-1111-2222')
+  const [volume, setVolume] = useState(50)
+  const [isMuted, setIsMuted] = useState(false)
+  const [isPaused, setIsPaused] = useState(false)
+  const [rightPanelTab, setRightPanelTab] = useState('intent') // 'intent', 'report'
+  
+  // 고객 정보 (실제로는 API에서 가져올 수 있음)
+  const [customerInfo] = useState({
+    name: '홍길동',
+    phone: '010-1111-2222',
+    plan: 'LTE30+'
+  })
+
+  // 추천 요금제 (AI가 분석해서 제공)
+  const [recommendedPlans, setRecommendedPlans] = useState([
+    { id: 1, name: '알뜰 5G 요금제', price: '25,000', data: '10GB', selected: false },
+    { id: 2, name: '실속 LTE 요금제', price: '19,000', data: '5GB + 통화 무제한', selected: true }
+  ])
+  
+  // 선택된 요금제에 대한 추천 스크립트
+  const [planScript, setPlanScript] = useState('')
+  const [scriptLoading, setScriptLoading] = useState(false)
+
+  // 고객 의중 (AI 분석 결과)
+  const [customerIntent, setCustomerIntent] = useState('현재 요금제가 과하다고 느끼고 있습니다.')
+
   const [sampleList] = useState([
     { id: 0, title: '인터넷 장애 - 긴급 문의' },
     { id: 1, title: '통화품질 불량 - 유심 교체' },
@@ -32,7 +57,6 @@ export default function AgentDashboard() {
 
   useEffect(() => {
     loadReports()
-    // 자동으로 최신 보고서 로드
     if (reports.length > 0 && !selectedReportId) {
       viewReport(reports[0].id)
     }
@@ -56,7 +80,6 @@ export default function AgentDashboard() {
       const trimmed = line.trim()
       if (!trimmed) continue
       
-      // Try to parse as "role: content" format
       const match = trimmed.match(/^(user|assistant|system):\s*(.+)$/i)
       if (match) {
         msgs.push({
@@ -64,10 +87,8 @@ export default function AgentDashboard() {
           content: match[2].trim()
         })
       } else if (msgs.length > 0) {
-        // Append to last message
         msgs[msgs.length - 1].content += '\n' + trimmed
       } else {
-        // First line without role prefix, assume user
         msgs.push({
           role: 'user',
           content: trimmed
@@ -104,6 +125,7 @@ export default function AgentDashboard() {
     setProcessing(true)
     setProcessingStep(0)
     setProcessingMessage('보고서 생성을 준비하고 있습니다...')
+    setRightPanelTab('report')
 
     try {
       const response = await fetch(`${API_URL}/process`, {
@@ -123,7 +145,6 @@ export default function AgentDashboard() {
         throw new Error(errorData.error || `서버 오류 (${response.status})`)
       }
 
-      // Read SSE stream
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
@@ -134,7 +155,7 @@ export default function AgentDashboard() {
 
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split('\n')
-        buffer = lines.pop() || '' // Keep incomplete line in buffer
+        buffer = lines.pop() || ''
 
         for (const line of lines) {
           if (line.startsWith('data: ')) {
@@ -142,14 +163,12 @@ export default function AgentDashboard() {
               const data = JSON.parse(line.substring(6))
               
               if (data.step === -1) {
-                // Error occurred
                 throw new Error(data.error || '보고서 생성 중 오류가 발생했습니다.')
               }
               
               setProcessingStep(data.step)
               setProcessingMessage(data.message)
 
-              // Final step with complete data
               if (data.step === 5 && data.data) {
                 const result = data.data
                 setCurrentReport(result)
@@ -158,7 +177,6 @@ export default function AgentDashboard() {
               }
             } catch (parseError) {
               console.error('Failed to parse SSE data:', parseError)
-              // Continue processing other lines
             }
           }
         }
@@ -168,10 +186,7 @@ export default function AgentDashboard() {
     } catch (err) {
       console.error('Process error:', err)
       const errorMessage = err.message || '보고서 생성 중 오류가 발생했습니다.'
-      
-      // Show user-friendly error message
       alert(`❌ 오류 발생\n\n${errorMessage}\n\n백엔드 서버가 실행 중인지 확인해주세요.`)
-      
       setProcessing(false)
       setProcessingStep(0)
       setProcessingMessage('')
@@ -193,6 +208,7 @@ export default function AgentDashboard() {
         setMessages(data.report.messages || [])
         setSelectedReportId(reportId)
         setView('main')
+        setRightPanelTab('report')
       }
     } catch (err) {
       console.error('Failed to load report:', err)
@@ -230,10 +246,6 @@ export default function AgentDashboard() {
     setSelectedReportId(null)
   }
 
-  const addMessage = (role, content) => {
-    setMessages(prev => [...prev, { role, content }])
-  }
-
   const handleFileUpload = (e) => {
     const file = e.target.files[0]
     if (!file) return
@@ -243,7 +255,6 @@ export default function AgentDashboard() {
       try {
         const text = event.target.result
         
-        // Try to parse as JSON first (exported chat format)
         try {
           const json = JSON.parse(text)
           if (Array.isArray(json) && json[0]?.role && json[0]?.content) {
@@ -252,7 +263,6 @@ export default function AgentDashboard() {
           }
         } catch {}
         
-        // Otherwise treat as plain text
         const parsed = parseMessages(text)
         if (parsed.length > 0) {
           setMessages(parsed)
@@ -274,47 +284,126 @@ export default function AgentDashboard() {
     link.click()
   }
 
+  const handleEndCall = () => {
+    setCallStatus('ended')
+  }
+
+  // 요금제 선택 핸들러
+  const handlePlanSelect = async (planId) => {
+    // 선택 상태 업데이트
+    setRecommendedPlans(prev => prev.map(plan => ({
+      ...plan,
+      selected: plan.id === planId
+    })))
+    
+    const selectedPlan = recommendedPlans.find(p => p.id === planId)
+    if (!selectedPlan) return
+    
+    // 스크립트 생성 요청
+    setScriptLoading(true)
+    setPlanScript('')
+    
+    try {
+      // 현재 대화 맥락을 포함한 스크립트 생성 요청
+      const response = await fetch(`${API_URL}/rag/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `고객에게 "${selectedPlan.name}" 요금제(월 ${selectedPlan.price}원, ${selectedPlan.data})를 추천하는 스크립트를 작성해주세요. 현재 대화 맥락을 고려해서 자연스럽게 제안하는 멘트를 만들어주세요.`,
+          history: messages.map(m => ({ role: m.role, content: m.content }))
+        })
+      })
+      
+      const data = await response.json()
+      setPlanScript(data.answer || '스크립트를 생성할 수 없습니다.')
+    } catch (error) {
+      console.error('Script generation error:', error)
+      setPlanScript(`고객님, 현재 사용량을 분석해본 결과 "${selectedPlan.name}" 요금제가 가장 적합해 보입니다. 월 ${selectedPlan.price}원에 ${selectedPlan.data}가 제공되어 현재보다 더 합리적으로 이용하실 수 있습니다. 변경을 도와드릴까요?`)
+    } finally {
+      setScriptLoading(false)
+    }
+  }
+
+  // 스크립트 복사
+  const copyPlanScript = () => {
+    navigator.clipboard.writeText(planScript)
+    alert('스크립트가 클립보드에 복사되었습니다.')
+  }
+
+  // 키워드 하이라이트 함수
+  const highlightKeywords = (text, keywords = ['비싸', '비싸요', '너무']) => {
+    let result = text
+    keywords.forEach(keyword => {
+      const regex = new RegExp(`(${keyword})`, 'gi')
+      result = result.replace(regex, `<span class="keyword-highlight">$1</span>`)
+    })
+    return result
+  }
+
   return (
     <div className="agent-app">
-      {/* Unified Header */}
-      <header className="unified-header">
+      {/* Header */}
+      <header className="main-header">
         <div className="header-left">
-          <h1>AiDam Agent</h1>
-          <span className="subtitle">고객 상담 분석 시스템</span>
+          <h1 className="app-title">AiDam</h1>
+          <div className="header-divider"></div>
+          <button 
+            className="end-call-btn"
+            onClick={handleEndCall}
+            disabled={callStatus === 'ended' || callStatus === 'idle'}
+          >
+            <span className="material-icons-outlined">call_end</span>
+            <span>End Call</span>
+          </button>
         </div>
-        
+
         <div className="header-center">
-          <div className="call-info">
-            <span className={`status-indicator status-${callStatus}`}></span>
-            <span className="status-text">
-              {callStatus === 'idle' && '대기 중'}
-              {callStatus === 'ringing' && '수신 중'}
-              {callStatus === 'active' && '통화 중'}
-              {callStatus === 'ended' && '통화 종료'}
-            </span>
-            {callStatus === 'active' && (
-              <span className="phone-number">📞 {currentPhoneNumber}</span>
-            )}
+          <div className="recording-status">
+            <span className="recording-dot"></span>
+            <span className="recording-text">Recording...</span>
           </div>
-          {messages.length > 0 && (
-            <span className="message-count">
-              {messages.length}개 메시지 (고객 {messages.filter(m => m.role === 'user').length} / 상담사 {messages.filter(m => m.role === 'assistant').length})
-            </span>
-          )}
+          <div className="volume-control">
+            <span className="material-icons-outlined">volume_down</span>
+            <input 
+              type="range" 
+              min="0" 
+              max="100" 
+              value={volume}
+              onChange={(e) => setVolume(e.target.value)}
+              className="volume-slider"
+            />
+            <span className="material-icons-outlined">volume_up</span>
+          </div>
+          <div className="call-controls">
+            <button 
+              className={`control-btn ${isPaused ? 'active' : ''}`}
+              onClick={() => setIsPaused(!isPaused)}
+            >
+              <span className="material-icons-outlined">{isPaused ? 'play_arrow' : 'pause'}</span>
+            </button>
+            <button 
+              className={`control-btn ${isMuted ? 'active' : ''}`}
+              onClick={() => setIsMuted(!isMuted)}
+            >
+              <span className="material-icons-outlined">{isMuted ? 'mic' : 'mic_off'}</span>
+            </button>
+          </div>
+          <div className="audio-visualizer">
+            <span className="bar" style={{ height: '8px' }}></span>
+            <span className="bar active" style={{ height: '20px' }}></span>
+            <span className="bar" style={{ height: '12px' }}></span>
+            <span className="bar active" style={{ height: '24px' }}></span>
+            <span className="bar" style={{ height: '8px' }}></span>
+            <span className="bar active" style={{ height: '16px' }}></span>
+          </div>
         </div>
 
         <div className="header-right">
-          <button className="call-btn" disabled={callStatus === 'idle'}>
-            📞 통화 종료
-          </button>
-          <div className="recording-indicator">
-            <span className="rec-dot"></span>
-            <span>녹음중</span>
-          </div>
           <button 
             className={`header-btn ${view === 'history' ? 'active' : ''}`}
             onClick={() => setView(view === 'history' ? 'main' : 'history')}
           >
+            <span className="material-icons-outlined">history</span>
             히스토리 ({reports.length})
           </button>
         </div>
@@ -322,219 +411,276 @@ export default function AgentDashboard() {
 
       <main className="agent-main">
         {view === 'main' && (
-          <div className="three-panel-view">
-            {/* 좌측: 채팅 UI */}
-            <div className="left-panel chat-panel">
-              <div className="panel-header">
-                <h2>고객 상담 대화</h2>
-                <div className="panel-actions">
-                  {messages.length > 0 && (
-                    <>
-                      <button onClick={exportMessages} className="icon-btn" title="내보내기">
-                        💾
-                      </button>
-                      <button onClick={clearCurrentConversation} className="icon-btn" title="초기화">
-                        🔄
-                      </button>
-                    </>
-                  )}
+          <div className="three-panel-layout">
+            {/* Left Panel: Customer Info + Conversation */}
+            <aside className="left-panel">
+              {/* Customer Info Card */}
+              <div className="info-card customer-info-card">
+                <div className="card-header">
+                  <h2>고객 정보</h2>
+                  <button className="history-link">
+                    <span className="material-icons-outlined">history</span>
+                    <span>상담 이력</span>
+                  </button>
+                </div>
+                <div className="info-grid">
+                  <div className="info-row">
+                    <span className="info-label">고객명:</span>
+                    <span className="info-value">{customerInfo.name}</span>
+                  </div>
+                  <div className="info-row">
+                    <span className="info-label">전화번호:</span>
+                    <span className="info-value">{customerInfo.phone}</span>
+                  </div>
+                  <div className="info-row">
+                    <span className="info-label">현재 요금제:</span>
+                    <span className="info-value plan-value">{customerInfo.plan}</span>
+                  </div>
                 </div>
               </div>
 
-              {messages.length === 0 ? (
-                <div className="empty-chat">
-                  <div className="empty-icon">💬</div>
-                  <p>상담 대화가 표시됩니다</p>
-                  <div className="empty-actions">
-                    <button onClick={showSampleList} className="sample-btn">
-                      📝 샘플 대화 불러오기
-                    </button>
-                    <label className="sample-btn">
-                      📁 파일에서 불러오기
-                      <input type="file" accept=".txt,.json" onChange={handleFileUpload} hidden />
-                    </label>
+              {/* Conversation History */}
+              <div className="info-card conversation-card">
+                <div className="card-header">
+                  <h2>대화 이력</h2>
+                  <div className="card-actions">
+                    {messages.length > 0 && (
+                      <>
+                        <button onClick={exportMessages} className="icon-btn" title="내보내기">
+                          <span className="material-icons-outlined">save</span>
+                        </button>
+                        <button onClick={clearCurrentConversation} className="icon-btn" title="초기화">
+                          <span className="material-icons-outlined">refresh</span>
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
-              ) : (
-                <>
+
+                {messages.length === 0 ? (
+                  <div className="empty-conversation">
+                    <span className="material-icons-outlined empty-icon">chat_bubble_outline</span>
+                    <p>상담 대화가 표시됩니다</p>
+                    <div className="empty-actions">
+                      <button onClick={showSampleList} className="action-btn primary">
+                        <span className="material-icons-outlined">description</span>
+                        샘플 대화 불러오기
+                      </button>
+                      <label className="action-btn secondary">
+                        <span className="material-icons-outlined">folder_open</span>
+                        파일에서 불러오기
+                        <input type="file" accept=".txt,.json" onChange={handleFileUpload} hidden />
+                      </label>
+                    </div>
+                  </div>
+                ) : (
                   <div className="chat-messages">
                     {messages.map((msg, idx) => (
-                      <div key={idx} className={`chat-message ${msg.role}`}>
-                        <div className="message-avatar">
-                          {msg.role === 'user' ? '👤' : '🎧'}
+                      <div key={idx} className={`chat-bubble ${msg.role}`}>
+                        <div className="bubble-avatar">
+                          <span className="material-icons-outlined">
+                            {msg.role === 'user' ? 'person' : 'support_agent'}
+                          </span>
                         </div>
-                        <div className="message-bubble">
-                          <div className="message-author">
-                            {msg.role === 'user' ? '고객' : '상담사'}
-                          </div>
-                          <div className="message-text">{msg.content}</div>
-                          <div className="message-time">
-                            {new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
-                          </div>
+                        <div className="bubble-content">
+                          <span className="bubble-author">
+                            {msg.role === 'user' ? '고객' : '상담사 (AI)'}
+                          </span>
+                          <div 
+                            className="bubble-text"
+                            dangerouslySetInnerHTML={{ 
+                              __html: msg.role === 'user' 
+                                ? highlightKeywords(msg.content) 
+                                : msg.content 
+                            }}
+                          />
                         </div>
                       </div>
                     ))}
                   </div>
-                </>
-              )}
-            </div>
-
-            {/* 가운데: RAG 기반 AI 상담 가이드 */}
-            <div className="center-panel ai-assistant-panel">
-              <RAGAssistant messages={messages} />
-            </div>
-
-            {/* 우측: 보고서 */}
-            <div className="right-panel report-panel">
-              <div className="panel-header">
-                <h2>상담 보고서</h2>
-                {messages.length > 0 && !processing && (
-                  <button onClick={handleProcess} className="generate-report-btn">
-                    보고서 생성
-                  </button>
                 )}
               </div>
+            </aside>
 
-              {processing && (
-                <div className="report-loading">
-                  <div className="loading-header">
-                    <div className="loading-spinner"></div>
-                    <h3>보고서 생성 중...</h3>
+            {/* Center Panel: AI Recommended Scripts */}
+            <section className="center-panel">
+              <RAGAssistant messages={messages} />
+            </section>
+
+            {/* Right Panel: Customer Intent + Recommendations */}
+            <aside className="right-panel">
+              {/* Tab Buttons */}
+              <div className="panel-tabs">
+                <button 
+                  className={`tab-btn ${rightPanelTab === 'intent' ? 'active' : ''}`}
+                  onClick={() => setRightPanelTab('intent')}
+                >
+                  고객 분석
+                </button>
+                <button 
+                  className={`tab-btn ${rightPanelTab === 'report' ? 'active' : ''}`}
+                  onClick={() => setRightPanelTab('report')}
+                >
+                  상담 보고서
+                </button>
+              </div>
+
+              {rightPanelTab === 'intent' && (
+                <>
+                  {/* Customer Intent Card */}
+                  <div className="info-card intent-card">
+                    <h2>고객 의중 판단 AI</h2>
+                    <div className="intent-content">
+                      <p>
+                        현재 요금제가 <span className="intent-highlight">과하다고 느끼고</span> 있습니다.
+                      </p>
+                    </div>
+                    <div className="intent-arrow"></div>
                   </div>
-                  
-                  <div className="progress-container">
-                    <div className="progress-bar-track">
-                      <div 
-                        className="progress-bar-fill" 
-                        style={{ width: `${(processingStep / 5) * 100}%` }}
-                      ></div>
+
+                  {/* Recommended Plans */}
+                  <div className="info-card plans-card">
+                    <h2>추천 요금제</h2>
+                    <p className="plans-subtitle">고객에게 제안할 요금제:</p>
+                    <div className="plans-list">
+                      {recommendedPlans.map(plan => (
+                        <div 
+                          key={plan.id} 
+                          className={`plan-item ${plan.selected ? 'selected' : ''}`}
+                          onClick={() => handlePlanSelect(plan.id)}
+                        >
+                          <h4 className={plan.selected ? 'plan-name-selected' : ''}>{plan.name}</h4>
+                          <p className="plan-detail">월 {plan.price}원, 데이터 {plan.data}</p>
+                        </div>
+                      ))}
                     </div>
                     
-                    <div className="progress-steps">
-                      <div className={`progress-step ${processingStep >= 1 ? 'active' : ''} ${processingStep > 1 ? 'completed' : ''}`}>
-                        <div className="step-icon">{processingStep > 1 ? '✓' : '📝'}</div>
-                        <div className="step-label">준비</div>
-                        <div className="step-description">대화 데이터 로드</div>
+                    {/* Plan Script Box */}
+                    <div className="plan-script-box">
+                      <div className="script-box-header">
+                        <span className="material-icons-outlined">edit_note</span>
+                        <span>추천 스크립트</span>
                       </div>
-                      
-                      <div className="progress-line"></div>
-                      
-                      <div className={`progress-step ${processingStep >= 2 ? 'active' : ''} ${processingStep > 2 ? 'completed' : ''}`}>
-                        <div className="step-icon">{processingStep > 2 ? '✓' : '🔍'}</div>
-                        <div className="step-label">분석</div>
-                        <div className="step-description">AI 대화 분석</div>
-                      </div>
-                      
-                      <div className="progress-line"></div>
-                      
-                      <div className={`progress-step ${processingStep >= 3 ? 'active' : ''} ${processingStep > 3 ? 'completed' : ''}`}>
-                        <div className="step-icon">{processingStep > 3 ? '✓' : '📊'}</div>
-                        <div className="step-label">보고서 생성</div>
-                        <div className="step-description">상세 리포트 작성</div>
-                      </div>
-                      
-                      <div className="progress-line"></div>
-                      
-                      <div className={`progress-step ${processingStep >= 4 ? 'active' : ''} ${processingStep > 4 ? 'completed' : ''}`}>
-                        <div className="step-icon">{processingStep > 4 ? '✓' : '💾'}</div>
-                        <div className="step-label">저장</div>
-                        <div className="step-description">보고서 저장</div>
-                      </div>
-                      
-                      <div className="progress-line"></div>
-                      
-                      <div className={`progress-step ${processingStep >= 5 ? 'active completed' : ''}`}>
-                        <div className="step-icon">✅</div>
-                        <div className="step-label">완료</div>
-                        <div className="step-description">처리 완료</div>
-                      </div>
-                    </div>
-                    
-                    <div className="progress-status">
-                      <div className="status-message">{processingMessage}</div>
-                      <div className="status-info">단계 {processingStep} / 5</div>
+                      {scriptLoading ? (
+                        <div className="script-loading">
+                          <div className="script-loader"></div>
+                          <span>스크립트 생성 중...</span>
+                        </div>
+                      ) : planScript ? (
+                        <div className="script-content-box">
+                          <p>{planScript}</p>
+                          <button className="copy-script-btn" onClick={copyPlanScript}>
+                            <span className="material-icons-outlined">content_copy</span>
+                            복사
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="script-placeholder">
+                          <p>요금제를 선택하면 현재 대화 맥락에 맞는<br/>추천 스크립트가 생성됩니다.</p>
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
+                </>
               )}
 
-              {!processing && !currentReport && (
-                <div className="empty-report">
-                  <div className="empty-icon">📋</div>
-                  <p>보고서가 아직 생성되지 않았습니다.</p>
-                  <p className="empty-help">
-                    상담이 종료되면<br/>
-                    "보고서 생성" 버튼을 클릭하세요.
-                  </p>
-                </div>
-              )}
-
-              {!processing && currentReport && (
-                <div className="report-content">
-                  {/* 분석 요약 카드 */}
-                  <div className="summary-cards">
-                    <div className="summary-card">
-                      <div className="card-label">전체 요약</div>
-                      <div className="card-value">{currentReport.analysis?.summary}</div>
-                    </div>
-                    
-                    <div className="summary-card">
-                      <div className="card-label">감정 분석</div>
-                      <div className="card-value">
-                        <span className={`sentiment-badge ${currentReport.analysis?.sentiment}`}>
-                          {currentReport.analysis?.sentiment === 'positive' ? '😊 긍정적' :
-                           currentReport.analysis?.sentiment === 'negative' ? '😞 부정적' :
-                           currentReport.analysis?.sentiment === 'mixed' ? '😐 복합적' : '😶 중립적'}
-                        </span>
+              {rightPanelTab === 'report' && (
+                <div className="report-panel-content">
+                  {processing && (
+                    <div className="report-loading">
+                      <div className="loading-header">
+                        <div className="loading-spinner"></div>
+                        <h3>보고서 생성 중...</h3>
+                      </div>
+                      
+                      <div className="progress-container">
+                        <div className="progress-bar-track">
+                          <div 
+                            className="progress-bar-fill" 
+                            style={{ width: `${(processingStep / 5) * 100}%` }}
+                          ></div>
+                        </div>
+                        
+                        <div className="progress-steps-compact">
+                          {['준비', '분석', '생성', '저장', '완료'].map((label, idx) => (
+                            <div 
+                              key={idx}
+                              className={`step-compact ${processingStep >= idx + 1 ? 'active' : ''} ${processingStep > idx + 1 ? 'completed' : ''}`}
+                            >
+                              <div className="step-dot"></div>
+                              <span>{label}</span>
+                            </div>
+                          ))}
+                        </div>
+                        
+                        <div className="progress-status">
+                          <div className="status-message">{processingMessage}</div>
+                        </div>
                       </div>
                     </div>
+                  )}
 
-                    <div className="summary-card">
-                      <div className="card-label">주요 주제</div>
-                      <div className="card-value">
+                  {!processing && !currentReport && (
+                    <div className="empty-report">
+                      <span className="material-icons-outlined empty-icon">description</span>
+                      <p>보고서가 아직 생성되지 않았습니다.</p>
+                      <p className="empty-help">
+                        상담이 종료되면<br/>
+                        "보고서 생성" 버튼을 클릭하세요.
+                      </p>
+                      {messages.length > 0 && (
+                        <button onClick={handleProcess} className="generate-report-btn">
+                          <span className="material-icons-outlined">summarize</span>
+                          보고서 생성
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {!processing && currentReport && (
+                    <div className="report-content">
+                      <div className="summary-section">
+                        <h3>📋 요약</h3>
+                        <p>{currentReport.analysis?.summary}</p>
+                      </div>
+
+                      <div className="topics-section">
+                        <h4>주요 주제</h4>
                         <div className="topic-tags">
                           {currentReport.analysis?.main_topics?.map((topic, i) => (
                             <span key={i} className="topic-tag">{topic}</span>
                           ))}
                         </div>
                       </div>
-                    </div>
 
-                    <div className="summary-card">
-                      <div className="card-label">통계</div>
-                      <div className="card-value stats-grid">
+                      <div className="stats-section">
                         <div className="stat-item">
-                          <span className="stat-label">전체</span>
                           <span className="stat-number">{currentReport.analysis?.statistics?.total_messages}</span>
+                          <span className="stat-label">전체</span>
                         </div>
                         <div className="stat-item">
-                          <span className="stat-label">고객</span>
                           <span className="stat-number">{currentReport.analysis?.statistics?.user_messages}</span>
+                          <span className="stat-label">고객</span>
                         </div>
                         <div className="stat-item">
-                          <span className="stat-label">상담사</span>
                           <span className="stat-number">{currentReport.analysis?.statistics?.assistant_messages}</span>
+                          <span className="stat-label">상담사</span>
                         </div>
-                        <div className="stat-item">
-                          <span className="stat-label">평균 길이</span>
-                          <span className="stat-number">{currentReport.analysis?.statistics?.average_message_length}</span>
+                      </div>
+
+                      <div className="detailed-report">
+                        <h3>📝 상세 보고서</h3>
+                        <div className="markdown-content">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {currentReport.report}
+                          </ReactMarkdown>
                         </div>
                       </div>
                     </div>
-                  </div>
-
-                  {/* 상세 보고서 */}
-                  <div className="detailed-report">
-                    <h3>📝 상세 보고서</h3>
-                    <div className="markdown-content">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {currentReport.report}
-                      </ReactMarkdown>
-                    </div>
-                  </div>
+                  )}
                 </div>
               )}
-            </div>
+            </aside>
           </div>
         )}
 
@@ -542,14 +688,15 @@ export default function AgentDashboard() {
           <div className="history-view">
             <div className="history-header">
               <h2>📚 보고서 히스토리</h2>
-              <button onClick={() => setView('main')} className="secondary-btn">
-                ← 돌아가기
+              <button onClick={() => setView('main')} className="back-btn">
+                <span className="material-icons-outlined">arrow_back</span>
+                돌아가기
               </button>
             </div>
             
             {reports.length === 0 ? (
               <div className="empty-state">
-                <div className="empty-icon">📚</div>
+                <span className="material-icons-outlined empty-icon">folder_open</span>
                 <p>저장된 보고서가 없습니다</p>
               </div>
             ) : (
@@ -569,7 +716,7 @@ export default function AgentDashboard() {
                           보기
                         </button>
                         <button 
-                          onClick={() => deleteReport(report.id)}
+                          onClick={(e) => deleteReport(report.id, e)}
                           className="delete-btn"
                         >
                           삭제
@@ -593,8 +740,9 @@ export default function AgentDashboard() {
           <div className="samples-view">
             <div className="samples-header">
               <h2>샘플 대화 목록</h2>
-              <button onClick={() => setView('main')} className="secondary-btn">
-                ← 돌아가기
+              <button onClick={() => setView('main')} className="back-btn">
+                <span className="material-icons-outlined">arrow_back</span>
+                돌아가기
               </button>
             </div>
             
@@ -609,7 +757,7 @@ export default function AgentDashboard() {
                   <div className="sample-info">
                     <h3 className="sample-title">{sample.title}</h3>
                   </div>
-                  <div className="sample-arrow">→</div>
+                  <span className="material-icons-outlined sample-arrow">arrow_forward</span>
                 </div>
               ))}
             </div>
@@ -619,4 +767,3 @@ export default function AgentDashboard() {
     </div>
   )
 }
-
