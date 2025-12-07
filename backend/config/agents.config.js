@@ -41,6 +41,19 @@ module.exports = {
         chat: '/chat',
         search: '/search'
       }
+    },
+    upsell: {
+      name: 'Upsell Agent',
+      url: process.env.UPSELL_AGENT_URL || 'http://localhost:8008',
+      enabled: process.env.UPSELL_AGENT_ENABLED !== 'false',
+      description: '업셀링 가능성 판단 및 고객 의중 분석 (FastAPI)',
+      timeout: 30000,
+      endpoints: {
+        health: '/health',
+        analyze: '/analyze',
+        analyzeQuick: '/analyze/quick',
+        intentOnly: '/intent-only'
+      }
     }
   },
 

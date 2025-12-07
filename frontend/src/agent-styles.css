@@ -5,10 +5,10 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
 
-* { 
-  box-sizing: border-box; 
-  margin: 0; 
-  padding: 0; 
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 :root {
@@ -33,7 +33,9 @@
   --radius-lg: 0.75rem;
 }
 
-body, html, #root {
+body,
+html,
+#root {
   height: 100%;
   font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: var(--bg-light);
@@ -153,7 +155,9 @@ body, html, #root {
 }
 
 @keyframes ping {
-  75%, 100% {
+
+  75%,
+  100% {
     transform: scale(2);
     opacity: 0;
   }
@@ -244,8 +248,13 @@ body, html, #root {
 }
 
 @keyframes visualize {
-  0% { transform: scaleY(0.8); }
-  100% { transform: scaleY(1.2); }
+  0% {
+    transform: scaleY(0.8);
+  }
+
+  100% {
+    transform: scaleY(1.2);
+  }
 }
 
 .header-right {
@@ -637,6 +646,56 @@ body, html, #root {
   font-weight: 600;
 }
 
+.intent-reasoning {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed rgba(59, 130, 246, 0.3);
+}
+
+.reasoning-label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--primary);
+  margin-bottom: 0.5rem;
+}
+
+.reasoning-label .material-icons-outlined {
+  font-size: 14px;
+}
+
+.reasoning-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.reasoning-step {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.reasoning-step::before {
+  content: "•";
+  color: var(--primary);
+  font-weight: bold;
+}
+
+.empty-plans {
+  padding: 2rem 1rem;
+  text-align: center;
+  background: var(--bg-light);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  border: 1px dashed var(--border-color);
+}
+
 .intent-arrow {
   position: absolute;
   left: 50%;
@@ -873,7 +932,9 @@ body, html, #root {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .progress-container {
@@ -936,8 +997,15 @@ body, html, #root {
 }
 
 @keyframes pulse-dot {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.3); }
+
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.3);
+  }
 }
 
 .progress-status {
@@ -1077,14 +1145,45 @@ body, html, #root {
   color: var(--text-primary);
 }
 
-.markdown-content h1 { font-size: 1.5rem; margin: 1.5rem 0 0.75rem; font-weight: 600; }
-.markdown-content h2 { font-size: 1.25rem; margin: 1.25rem 0 0.5rem; font-weight: 600; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; }
-.markdown-content h3 { font-size: 1rem; margin: 1rem 0 0.5rem; font-weight: 600; }
-.markdown-content h4 { font-size: 0.875rem; margin: 0.75rem 0 0.5rem; font-weight: 600; }
+.markdown-content h1 {
+  font-size: 1.5rem;
+  margin: 1.5rem 0 0.75rem;
+  font-weight: 600;
+}
 
-.markdown-content p { margin: 0.5rem 0; }
-.markdown-content ul, .markdown-content ol { margin: 0.5rem 0; padding-left: 1.5rem; }
-.markdown-content li { margin: 0.25rem 0; }
+.markdown-content h2 {
+  font-size: 1.25rem;
+  margin: 1.25rem 0 0.5rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0.5rem;
+}
+
+.markdown-content h3 {
+  font-size: 1rem;
+  margin: 1rem 0 0.5rem;
+  font-weight: 600;
+}
+
+.markdown-content h4 {
+  font-size: 0.875rem;
+  margin: 0.75rem 0 0.5rem;
+  font-weight: 600;
+}
+
+.markdown-content p {
+  margin: 0.5rem 0;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+
+.markdown-content li {
+  margin: 0.25rem 0;
+}
 
 .markdown-content code {
   background: var(--bg-light);
@@ -1124,7 +1223,8 @@ body, html, #root {
   font-size: 0.8rem;
 }
 
-.markdown-content th, .markdown-content td {
+.markdown-content th,
+.markdown-content td {
   border: 1px solid var(--border-color);
   padding: 0.5rem;
   text-align: left;
@@ -1384,15 +1484,15 @@ body, html, #root {
   .three-panel-layout {
     grid-template-columns: 1fr 1fr;
   }
-  
+
   .left-panel {
     display: none;
   }
-  
+
   .header-center {
     gap: 1rem;
   }
-  
+
   .volume-control {
     display: none;
   }
@@ -1404,21 +1504,21 @@ body, html, #root {
     flex-wrap: wrap;
     gap: 0.5rem;
   }
-  
+
   .header-center {
     order: 3;
     width: 100%;
     justify-content: center;
   }
-  
+
   .three-panel-layout {
     grid-template-columns: 1fr;
   }
-  
+
   .center-panel {
     min-height: 50vh;
   }
-  
+
   .agent-main {
     padding: 0.5rem;
   }

@@ -1,0 +1,21 @@
+# FastAPI 및 서버
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# LangChain 및 LangGraph
+langchain>=0.3.10
+langchain-openai>=0.2.10
+langchain-community>=0.3.10
+langchain-core>=0.3.21
+langgraph>=0.2.53
+
+# OpenAI
+openai==1.57.2
+
+# 환경 변수
+python-dotenv==1.0.1
+
+# 유틸리티
+pydantic==2.10.3
+pydantic-settings==2.6.1
+

@@ -503,6 +503,212 @@ app.post('/rag/search', async (req, res) => {
 });
 
 /**
+ * POST /upsell/analyze
+ * 업셀링 가능성 분석 (Upsell Agent에 위임)
+ */
+app.post('/upsell/analyze', async (req, res) => {
+  try {
+    const { conversation_history, current_plan, rag_suggestion, customer_info } = req.body;
+    
+    if (!conversation_history || !Array.isArray(conversation_history)) {
+      return res.status(400).json({ error: 'conversation_history array is required' });
+    }
+
+    if (!current_plan) {
+      return res.status(400).json({ error: 'current_plan is required' });
+    }
+
+    // Upsell Agent 헬스체크
+    const upsellAgentHealth = await checkAgentHealth('upsell');
+    
+    if (!upsellAgentHealth.ok) {
+      return res.status(503).json({ 
+        error: 'Upsell Agent is not available',
+        detail: 'Upsell Agent가 실행 중이지 않습니다. 업셀링 분석 기능을 사용할 수 없습니다.',
+        service: 'Main Backend'
+      });
+    }
+
+    console.log(`[Orchestrator] Forwarding upsell analysis request to Upsell Agent`);
+
+    const upsellAgent = agentsConfig.getAgent('upsell');
+    const url = agentsConfig.buildUrl('upsell', 'analyze');
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversation_history,
+        current_plan,
+        rag_suggestion,
+        customer_info
+      }),
+      timeout: upsellAgent.timeout
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Upsell Agent error (${response.status}): ${errorText}`);
+    }
+
+    const result = await response.json();
+    
+    console.log(`[Orchestrator] Upsell Agent response received`);
+    res.json(result);
+
+  } catch (err) {
+    console.error('[Orchestrator] Upsell analysis error:', err);
+    
+    if (err.code === 'ECONNREFUSED') {
+      return res.status(503).json({ 
+        error: 'Upsell Agent에 연결할 수 없습니다.',
+        detail: 'Upsell Agent가 실행 중인지 확인해주세요 (포트 8008).',
+        service: 'Main Backend'
+      });
+    }
+    
+    res.status(500).json({ 
+      error: err.message || 'Upsell analysis failed',
+      service: 'Main Backend'
+    });
+  }
+});
+
+/**
+ * POST /upsell/analyze/quick
+ * 간편 업셀링 분석 (기본 요금제 정보로 빠른 분석)
+ */
+app.post('/upsell/analyze/quick', async (req, res) => {
+  try {
+    const { conversation_history, current_plan_name, current_plan_fee } = req.body;
+    
+    if (!conversation_history || !Array.isArray(conversation_history)) {
+      return res.status(400).json({ error: 'conversation_history array is required' });
+    }
+
+    // Upsell Agent 헬스체크
+    const upsellAgentHealth = await checkAgentHealth('upsell');
+    
+    if (!upsellAgentHealth.ok) {
+      return res.status(503).json({ 
+        error: 'Upsell Agent is not available',
+        detail: 'Upsell Agent가 실행 중이지 않습니다.',
+        service: 'Main Backend'
+      });
+    }
+
+    console.log(`[Orchestrator] Forwarding quick upsell analysis to Upsell Agent`);
+
+    const upsellAgent = agentsConfig.getAgent('upsell');
+    const url = agentsConfig.buildUrl('upsell', 'analyzeQuick');
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversation_history,
+        current_plan_name: current_plan_name || 'LTE30+',
+        current_plan_fee: current_plan_fee || 35000
+      }),
+      timeout: upsellAgent.timeout
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Upsell Agent error (${response.status}): ${errorText}`);
+    }
+
+    const result = await response.json();
+    
+    console.log(`[Orchestrator] Upsell Agent quick analysis response received`);
+    res.json(result);
+
+  } catch (err) {
+    console.error('[Orchestrator] Quick upsell analysis error:', err);
+    
+    if (err.code === 'ECONNREFUSED') {
+      return res.status(503).json({ 
+        error: 'Upsell Agent에 연결할 수 없습니다.',
+        detail: 'Upsell Agent가 실행 중인지 확인해주세요 (포트 8008).',
+        service: 'Main Backend'
+      });
+    }
+    
+    res.status(500).json({ 
+      error: err.message || 'Quick upsell analysis failed',
+      service: 'Main Backend'
+    });
+  }
+});
+
+/**
+ * POST /upsell/intent-only
+ * 고객 의중 분석만 수행 (업셀링 판단 제외, 빠른 응답)
+ */
+app.post('/upsell/intent-only', async (req, res) => {
+  try {
+    const { conversation_history, current_plan_name, current_plan_fee } = req.body;
+    
+    if (!conversation_history || !Array.isArray(conversation_history)) {
+      return res.status(400).json({ error: 'conversation_history array is required' });
+    }
+
+    // Upsell Agent 헬스체크
+    const upsellAgentHealth = await checkAgentHealth('upsell');
+    
+    if (!upsellAgentHealth.ok) {
+      return res.status(503).json({ 
+        error: 'Upsell Agent is not available',
+        detail: 'Upsell Agent가 실행 중이지 않습니다.',
+        service: 'Main Backend'
+      });
+    }
+
+    console.log(`[Orchestrator] Forwarding intent-only analysis to Upsell Agent`);
+
+    const upsellAgent = agentsConfig.getAgent('upsell');
+    const url = agentsConfig.buildUrl('upsell', 'intentOnly');
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversation_history,
+        current_plan_name: current_plan_name || 'LTE30+',
+        current_plan_fee: current_plan_fee || 35000
+      }),
+      timeout: upsellAgent.timeout
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Upsell Agent error (${response.status}): ${errorText}`);
+    }
+
+    const result = await response.json();
+    
+    console.log(`[Orchestrator] Upsell Agent intent-only response received`);
+    res.json(result);
+
+  } catch (err) {
+    console.error('[Orchestrator] Intent-only analysis error:', err);
+    
+    if (err.code === 'ECONNREFUSED') {
+      return res.status(503).json({ 
+        error: 'Upsell Agent에 연결할 수 없습니다.',
+        detail: 'Upsell Agent가 실행 중인지 확인해주세요 (포트 8008).',
+        service: 'Main Backend'
+      });
+    }
+    
+    res.status(500).json({ 
+      error: err.message || 'Intent-only analysis failed',
+      service: 'Main Backend'
+    });
+  }
+});
+
+/**
  * 404 핸들러
  */
 app.use((req, res) => {
@@ -519,7 +725,10 @@ app.use((req, res) => {
       'GET /reports/:id',
       'DELETE /reports/:id',
       'POST /rag/chat',
-      'POST /rag/search'
+      'POST /rag/search',
+      'POST /upsell/analyze',
+      'POST /upsell/analyze/quick',
+      'POST /upsell/intent-only'
     ]
   });
 });
@@ -555,15 +764,19 @@ app.listen(PORT, async () => {
   }
   
   console.log('\n📋 Available Endpoints:');
-  console.log('  - GET  /health           (System health check)');
-  console.log('  - GET  /models           (Available LLM models)');
-  console.log('  - POST /analyze          (Analyze conversation)');
-  console.log('  - POST /generate-report  (Generate report)');
-  console.log('  - POST /process          (Full analysis + report)');
-  console.log('  - GET  /reports          (List all reports)');
-  console.log('  - GET  /reports/:id      (Get specific report)');
-  console.log('  - DELETE /reports/:id    (Delete report)');
-  console.log('  - POST /rag/chat         (RAG-based guide)');
+  console.log('  - GET  /health                  (System health check)');
+  console.log('  - GET  /models                  (Available LLM models)');
+  console.log('  - POST /analyze                 (Analyze conversation)');
+  console.log('  - POST /generate-report         (Generate report)');
+  console.log('  - POST /process                 (Full analysis + report)');
+  console.log('  - GET  /reports                 (List all reports)');
+  console.log('  - GET  /reports/:id             (Get specific report)');
+  console.log('  - DELETE /reports/:id           (Delete report)');
+  console.log('  - POST /rag/chat                (RAG-based guide)');
+  console.log('  - POST /rag/search              (RAG search only)');
+  console.log('  - POST /upsell/analyze          (Upsell analysis)');
+  console.log('  - POST /upsell/analyze/quick    (Quick upsell analysis)');
+  console.log('  - POST /upsell/intent-only      (Intent analysis only)');
   console.log('================================================\n');
 });
 

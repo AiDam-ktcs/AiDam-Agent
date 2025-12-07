@@ -5,6 +5,8 @@ import RAGAssistant from './RAGAssistant'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 
+const UPSELL_AGENT_URL = 'http://localhost:8008'
+
 export default function AgentDashboard() {
   const [view, setView] = useState('main') // 'main', 'history', 'samples'
   const [messages, setMessages] = useState([])
@@ -21,7 +23,7 @@ export default function AgentDashboard() {
   const [isMuted, setIsMuted] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState('intent') // 'intent', 'report'
-  
+
   // 고객 정보 (실제로는 API에서 가져올 수 있음)
   const [customerInfo] = useState({
     name: '홍길동',
@@ -30,17 +32,18 @@ export default function AgentDashboard() {
   })
 
   // 추천 요금제 (AI가 분석해서 제공)
-  const [recommendedPlans, setRecommendedPlans] = useState([
-    { id: 1, name: '알뜰 5G 요금제', price: '25,000', data: '10GB', selected: false },
-    { id: 2, name: '실속 LTE 요금제', price: '19,000', data: '5GB + 통화 무제한', selected: true }
-  ])
-  
+  const [recommendedPlans, setRecommendedPlans] = useState([])
+
+  // AI 분석/사고 과정
+  const [aiReasoning, setAiReasoning] = useState([])
+  const [isAnalyzingIntent, setIsAnalyzingIntent] = useState(false)
+
   // 선택된 요금제에 대한 추천 스크립트
   const [planScript, setPlanScript] = useState('')
   const [scriptLoading, setScriptLoading] = useState(false)
 
   // 고객 의중 (AI 분석 결과)
-  const [customerIntent, setCustomerIntent] = useState('현재 요금제가 과하다고 느끼고 있습니다.')
+  const [customerIntent, setCustomerIntent] = useState('대화 내용 분석 대기 중...')
 
   const [sampleList] = useState([
     { id: 0, title: '인터넷 장애 - 긴급 문의' },
@@ -62,6 +65,78 @@ export default function AgentDashboard() {
     }
   }, [])
 
+  // 대화가 업데이트될 때마다 의중 분석 (User 메시지인 경우)
+  useEffect(() => {
+    if (messages.length > 0) {
+      const lastMsg = messages[messages.length - 1]
+      // 실제로는 assistant 메시지 이후에도 반응할 수 있지만, user 입력에 반응하는 것이 일반적
+      if (lastMsg.role === 'user') {
+        analyzeIntent()
+      }
+    }
+  }, [messages])
+
+  // AI 의중 분석 (Upsell Agent 연결)
+  const analyzeIntent = async () => {
+    setIsAnalyzingIntent(true)
+
+    // 분석 시작 시점에는 간단한 상태만 표시 (또는 이전 사고 과정 초기화)
+    setAiReasoning(['대화의 맥락을 파악하고 있습니다...'])
+
+    try {
+      const payload = {
+        conversation_history: messages.map(m => ({ role: m.role, content: m.content })),
+        current_plan_name: customerInfo.plan,
+        current_plan_fee: 35000 // 예시 가격
+      }
+
+      const response = await fetch(`${UPSELL_AGENT_URL}/analyze/quick`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      })
+
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status}`)
+      }
+
+      const data = await response.json()
+
+      // AI의 실제 사고 과정으로 업데이트
+      if (data.reasoning_steps && data.reasoning_steps.length > 0) {
+        // 단계별로 표시되는 효과를 위해 순차적으로 업데이트할 수도 있지만,
+        // 여기서는 한번에 업데이트하거나, 원한다면 타이머를 둬서 하나씩 보여줄 수 있음.
+        // UX상 한번에 보여주는 것이 깔끔할 수 있음 (이미 분석이 끝났으므로)
+        setAiReasoning(data.reasoning_steps)
+      } else {
+        setAiReasoning(['특이사항이 발견되지 않았습니다.'])
+      }
+
+      // 상태 업데이트
+      setCustomerIntent(data.intent_description || data.customer_intent)
+
+      // 추천 요금제 매핑
+      const plans = (data.recommended_plans || []).map((plan, idx) => ({
+        id: idx,
+        name: plan.plan_name,
+        price: plan.monthly_fee.toLocaleString(),
+        data: plan.data_limit,
+        selected: false
+      }))
+
+      setRecommendedPlans(plans)
+
+    } catch (error) {
+      console.error('Intent analysis failed:', error)
+      setAiReasoning(['분석 서버 연결에 실패했습니다.'])
+      setCustomerIntent('시스템 오류 발생')
+    } finally {
+      setIsAnalyzingIntent(false)
+    }
+  }
+
   const loadReports = async () => {
     try {
       const resp = await fetch(`${API_URL}/reports`)
@@ -75,11 +150,11 @@ export default function AgentDashboard() {
   const parseMessages = (text) => {
     const lines = text.trim().split('\n')
     const msgs = []
-    
+
     for (const line of lines) {
       const trimmed = line.trim()
       if (!trimmed) continue
-      
+
       const match = trimmed.match(/^(user|assistant|system):\s*(.+)$/i)
       if (match) {
         msgs.push({
@@ -95,7 +170,7 @@ export default function AgentDashboard() {
         })
       }
     }
-    
+
     return msgs
   }
 
@@ -161,11 +236,11 @@ export default function AgentDashboard() {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.substring(6))
-              
+
               if (data.step === -1) {
                 throw new Error(data.error || '보고서 생성 중 오류가 발생했습니다.')
               }
-              
+
               setProcessingStep(data.step)
               setProcessingMessage(data.message)
 
@@ -197,7 +272,7 @@ export default function AgentDashboard() {
     try {
       const resp = await fetch(`${API_URL}/reports/${reportId}`)
       const data = await resp.json()
-      
+
       if (data.success) {
         setCurrentReport({
           reportId: data.report.id,
@@ -218,14 +293,14 @@ export default function AgentDashboard() {
 
   const deleteReport = async (reportId, e) => {
     e.stopPropagation()
-    
+
     if (!confirm('Delete this report?')) return
-    
+
     try {
       const resp = await fetch(`${API_URL}/reports/${reportId}`, {
         method: 'DELETE'
       })
-      
+
       if (resp.ok) {
         await loadReports()
         if (currentReport && currentReport.reportId === reportId) {
@@ -254,15 +329,15 @@ export default function AgentDashboard() {
     reader.onload = (event) => {
       try {
         const text = event.target.result
-        
+
         try {
           const json = JSON.parse(text)
           if (Array.isArray(json) && json[0]?.role && json[0]?.content) {
             setMessages(json)
             return
           }
-        } catch {}
-        
+        } catch { }
+
         const parsed = parseMessages(text)
         if (parsed.length > 0) {
           setMessages(parsed)
@@ -295,14 +370,14 @@ export default function AgentDashboard() {
       ...plan,
       selected: plan.id === planId
     })))
-    
+
     const selectedPlan = recommendedPlans.find(p => p.id === planId)
     if (!selectedPlan) return
-    
+
     // 스크립트 생성 요청
     setScriptLoading(true)
     setPlanScript('')
-    
+
     try {
       // 현재 대화 맥락을 포함한 스크립트 생성 요청
       const response = await fetch(`${API_URL}/rag/chat`, {
@@ -313,7 +388,7 @@ export default function AgentDashboard() {
           history: messages.map(m => ({ role: m.role, content: m.content }))
         })
       })
-      
+
       const data = await response.json()
       setPlanScript(data.answer || '스크립트를 생성할 수 없습니다.')
     } catch (error) {
@@ -347,7 +422,7 @@ export default function AgentDashboard() {
         <div className="header-left">
           <h1 className="app-title">AiDam</h1>
           <div className="header-divider"></div>
-          <button 
+          <button
             className="end-call-btn"
             onClick={handleEndCall}
             disabled={callStatus === 'ended' || callStatus === 'idle'}
@@ -364,10 +439,10 @@ export default function AgentDashboard() {
           </div>
           <div className="volume-control">
             <span className="material-icons-outlined">volume_down</span>
-            <input 
-              type="range" 
-              min="0" 
-              max="100" 
+            <input
+              type="range"
+              min="0"
+              max="100"
               value={volume}
               onChange={(e) => setVolume(e.target.value)}
               className="volume-slider"
@@ -375,13 +450,13 @@ export default function AgentDashboard() {
             <span className="material-icons-outlined">volume_up</span>
           </div>
           <div className="call-controls">
-            <button 
+            <button
               className={`control-btn ${isPaused ? 'active' : ''}`}
               onClick={() => setIsPaused(!isPaused)}
             >
               <span className="material-icons-outlined">{isPaused ? 'play_arrow' : 'pause'}</span>
             </button>
-            <button 
+            <button
               className={`control-btn ${isMuted ? 'active' : ''}`}
               onClick={() => setIsMuted(!isMuted)}
             >
@@ -399,7 +474,7 @@ export default function AgentDashboard() {
         </div>
 
         <div className="header-right">
-          <button 
+          <button
             className={`header-btn ${view === 'history' ? 'active' : ''}`}
             onClick={() => setView(view === 'history' ? 'main' : 'history')}
           >
@@ -486,12 +561,12 @@ export default function AgentDashboard() {
                           <span className="bubble-author">
                             {msg.role === 'user' ? '고객' : '상담사 (AI)'}
                           </span>
-                          <div 
+                          <div
                             className="bubble-text"
-                            dangerouslySetInnerHTML={{ 
-                              __html: msg.role === 'user' 
-                                ? highlightKeywords(msg.content) 
-                                : msg.content 
+                            dangerouslySetInnerHTML={{
+                              __html: msg.role === 'user'
+                                ? highlightKeywords(msg.content)
+                                : msg.content
                             }}
                           />
                         </div>
@@ -511,13 +586,13 @@ export default function AgentDashboard() {
             <aside className="right-panel">
               {/* Tab Buttons */}
               <div className="panel-tabs">
-                <button 
+                <button
                   className={`tab-btn ${rightPanelTab === 'intent' ? 'active' : ''}`}
                   onClick={() => setRightPanelTab('intent')}
                 >
                   고객 분석
                 </button>
-                <button 
+                <button
                   className={`tab-btn ${rightPanelTab === 'report' ? 'active' : ''}`}
                   onClick={() => setRightPanelTab('report')}
                 >
@@ -532,8 +607,26 @@ export default function AgentDashboard() {
                     <h2>고객 의중 판단 AI</h2>
                     <div className="intent-content">
                       <p>
-                        현재 요금제가 <span className="intent-highlight">과하다고 느끼고</span> 있습니다.
+                        <span className="intent-highlight">{customerIntent}</span>
                       </p>
+
+                      {/* AI Thinking Process */}
+                      {(isAnalyzingIntent || aiReasoning.length > 0) && (
+                        <div className="intent-reasoning">
+                          <div className="reasoning-label">
+                            <span className="material-icons-outlined">psychology</span>
+                            <span>AI 사고 과정</span>
+                          </div>
+                          <div className="reasoning-steps">
+                            {aiReasoning.map((step, idx) => (
+                              <span key={idx} className="reasoning-step">{step}</span>
+                            ))}
+                            {isAnalyzingIntent && (
+                              <span className="reasoning-step">...</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                     <div className="intent-arrow"></div>
                   </div>
@@ -543,18 +636,24 @@ export default function AgentDashboard() {
                     <h2>추천 요금제</h2>
                     <p className="plans-subtitle">고객에게 제안할 요금제:</p>
                     <div className="plans-list">
-                      {recommendedPlans.map(plan => (
-                        <div 
-                          key={plan.id} 
-                          className={`plan-item ${plan.selected ? 'selected' : ''}`}
-                          onClick={() => handlePlanSelect(plan.id)}
-                        >
-                          <h4 className={plan.selected ? 'plan-name-selected' : ''}>{plan.name}</h4>
-                          <p className="plan-detail">월 {plan.price}원, 데이터 {plan.data}</p>
+                      {recommendedPlans.length === 0 ? (
+                        <div className="empty-plans">
+                          <p>추천할 만한 요금제가 없습니다.</p>
                         </div>
-                      ))}
+                      ) : (
+                        recommendedPlans.map(plan => (
+                          <div
+                            key={plan.id}
+                            className={`plan-item ${plan.selected ? 'selected' : ''}`}
+                            onClick={() => handlePlanSelect(plan.id)}
+                          >
+                            <h4 className={plan.selected ? 'plan-name-selected' : ''}>{plan.name}</h4>
+                            <p className="plan-detail">월 {plan.price}원, {plan.data}</p>
+                          </div>
+                        ))
+                      )}
                     </div>
-                    
+
                     {/* Plan Script Box */}
                     <div className="plan-script-box">
                       <div className="script-box-header">
@@ -576,7 +675,7 @@ export default function AgentDashboard() {
                         </div>
                       ) : (
                         <div className="script-placeholder">
-                          <p>요금제를 선택하면 현재 대화 맥락에 맞는<br/>추천 스크립트가 생성됩니다.</p>
+                          <p>요금제를 선택하면 현재 대화 맥락에 맞는<br />추천 스크립트가 생성됩니다.</p>
                         </div>
                       )}
                     </div>
@@ -592,18 +691,18 @@ export default function AgentDashboard() {
                         <div className="loading-spinner"></div>
                         <h3>보고서 생성 중...</h3>
                       </div>
-                      
+
                       <div className="progress-container">
                         <div className="progress-bar-track">
-                          <div 
-                            className="progress-bar-fill" 
+                          <div
+                            className="progress-bar-fill"
                             style={{ width: `${(processingStep / 5) * 100}%` }}
                           ></div>
                         </div>
-                        
+
                         <div className="progress-steps-compact">
                           {['준비', '분석', '생성', '저장', '완료'].map((label, idx) => (
-                            <div 
+                            <div
                               key={idx}
                               className={`step-compact ${processingStep >= idx + 1 ? 'active' : ''} ${processingStep > idx + 1 ? 'completed' : ''}`}
                             >
@@ -612,7 +711,7 @@ export default function AgentDashboard() {
                             </div>
                           ))}
                         </div>
-                        
+
                         <div className="progress-status">
                           <div className="status-message">{processingMessage}</div>
                         </div>
@@ -625,7 +724,7 @@ export default function AgentDashboard() {
                       <span className="material-icons-outlined empty-icon">description</span>
                       <p>보고서가 아직 생성되지 않았습니다.</p>
                       <p className="empty-help">
-                        상담이 종료되면<br/>
+                        상담이 종료되면<br />
                         "보고서 생성" 버튼을 클릭하세요.
                       </p>
                       {messages.length > 0 && (
@@ -693,7 +792,7 @@ export default function AgentDashboard() {
                 돌아가기
               </button>
             </div>
-            
+
             {reports.length === 0 ? (
               <div className="empty-state">
                 <span className="material-icons-outlined empty-icon">folder_open</span>
@@ -709,13 +808,13 @@ export default function AgentDashboard() {
                         <span className="report-date">{new Date(report.timestamp).toLocaleString('ko-KR')}</span>
                       </div>
                       <div className="report-actions">
-                        <button 
+                        <button
                           onClick={() => viewReport(report.id)}
                           className="view-btn"
                         >
                           보기
                         </button>
-                        <button 
+                        <button
                           onClick={(e) => deleteReport(report.id, e)}
                           className="delete-btn"
                         >
@@ -745,11 +844,11 @@ export default function AgentDashboard() {
                 돌아가기
               </button>
             </div>
-            
+
             <div className="sample-list">
               {sampleList.map(sample => (
-                <div 
-                  key={sample.id} 
+                <div
+                  key={sample.id}
                   className="sample-item"
                   onClick={() => loadSampleConversation(sample.id)}
                 >
