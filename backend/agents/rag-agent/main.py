@@ -91,6 +91,15 @@ class ChatResponse(BaseModel):
     history: List[Dict[str, str]]
 
 
+class SearchRequest(BaseModel):
+    query: str
+    k: int = 3
+
+
+class SearchResponse(BaseModel):
+    sources: List[Dict[str, Any]]
+
+
 @app.get("/")
 async def root():
     """헬스 체크"""
@@ -127,6 +136,41 @@ async def chat(request: ChatRequest):
         
     except Exception as e:
         print(f"채팅 처리 중 오류: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="현재 시스템 문제로 내부 상담 매뉴얼 조회가 어렵습니다."
+        )
+
+
+@app.post("/search", response_model=SearchResponse)
+async def search(request: SearchRequest):
+    """검색 전용 엔드포인트 - LLM 답변 생성 없이 매뉴얼 검색만 수행"""
+    global pdf_loader
+    
+    if pdf_loader is None:
+        raise HTTPException(
+            status_code=503,
+            detail="현재 시스템 문제로 내부 상담 매뉴얼 조회가 어렵습니다."
+        )
+    
+    try:
+        # 벡터 검색만 수행 (LLM 호출 없음)
+        docs = pdf_loader.search(request.query, k=request.k)
+        
+        # 검색 결과를 sources 형태로 변환
+        sources = [
+            {
+                "content": doc["content"],
+                "page": doc["metadata"].get("page", "N/A"),
+                "score": doc["score"]
+            }
+            for doc in docs
+        ]
+        
+        return SearchResponse(sources=sources)
+        
+    except Exception as e:
+        print(f"검색 처리 중 오류: {e}")
         raise HTTPException(
             status_code=500,
             detail="현재 시스템 문제로 내부 상담 매뉴얼 조회가 어렵습니다."

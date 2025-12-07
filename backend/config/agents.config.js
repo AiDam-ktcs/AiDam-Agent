@@ -38,7 +38,8 @@ module.exports = {
       timeout: 30000,
       endpoints: {
         health: '/',
-        chat: '/chat'
+        chat: '/chat',
+        search: '/search'
       }
     }
   },

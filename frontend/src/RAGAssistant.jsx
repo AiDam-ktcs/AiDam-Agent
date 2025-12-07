@@ -4,12 +4,33 @@ import './rag-assistant-styles.css'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 
+// 더미 키워드 데이터
+const DUMMY_KEYWORDS = [
+  '요금제 변경',
+  '배송 조회',
+  '반품 절차',
+  '환불 정책',
+  '회원 가입',
+  '비밀번호 재설정',
+  '포인트 적립',
+  '쿠폰 사용',
+  '결제 오류',
+  '주문 취소'
+]
+
 export default function RAGAssistant({ messages: conversationMessages }) {
   const [ragMessages, setRagMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [history, setHistory] = useState([])
+  const [hoveredKeyword, setHoveredKeyword] = useState(null)
+  const [previewData, setPreviewData] = useState(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [searchCache, setSearchCache] = useState({})
+  const [expandedSources, setExpandedSources] = useState({}) // 확장/축소 상태
   const messagesEndRef = useRef(null)
+  const hoverTimeoutRef = useRef(null)
+  const leaveTimeoutRef = useRef(null)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -86,7 +107,166 @@ export default function RAGAssistant({ messages: conversationMessages }) {
   const clearChat = () => {
     setRagMessages([])
     setHistory([])
+    setExpandedSources({}) // 확장 상태도 초기화
   }
+
+  // 출처 확장/축소 토글
+  const toggleSource = (msgIdx, sourceIdx) => {
+    const key = `${msgIdx}-${sourceIdx}`
+    setExpandedSources(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }))
+  }
+
+  // 키워드 호버 시 매뉴얼 내용 프리뷰
+  const handleKeywordHover = (keyword) => {
+    setHoveredKeyword(keyword)
+    
+    if (leaveTimeoutRef.current) {
+      clearTimeout(leaveTimeoutRef.current)
+      leaveTimeoutRef.current = null
+    }
+    
+    if (searchCache[keyword]) {
+      console.log(`[Cache Hit] ${keyword}`)
+      setPreviewData(searchCache[keyword])
+      return
+    }
+    
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current)
+    }
+
+    hoverTimeoutRef.current = setTimeout(async () => {
+      setPreviewLoading(true)
+      try {
+        console.log(`[Cache Miss] Fetching: ${keyword}`)
+        
+        const response = await axios.post(`${API_URL}/rag/search`, {
+          query: keyword,
+          k: 1
+        })
+
+        const resultData = {
+          keyword,
+          sources: response.data.sources || []
+        }
+        
+        setPreviewData(resultData)
+        setSearchCache(prev => ({
+          ...prev,
+          [keyword]: resultData
+        }))
+      } catch (error) {
+        console.error('Preview Error:', error)
+        const errorData = {
+          keyword,
+          sources: [],
+          error: '매뉴얼을 불러올 수 없습니다.'
+        }
+        setPreviewData(errorData)
+        setSearchCache(prev => ({
+          ...prev,
+          [keyword]: errorData
+        }))
+      } finally {
+        setPreviewLoading(false)
+      }
+    }, 200)
+  }
+
+  const handleKeywordLeave = () => {
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current)
+      hoverTimeoutRef.current = null
+    }
+    
+    if (leaveTimeoutRef.current) {
+      clearTimeout(leaveTimeoutRef.current)
+    }
+    
+    leaveTimeoutRef.current = setTimeout(() => {
+      setHoveredKeyword(null)
+      setPreviewData(null)
+      leaveTimeoutRef.current = null
+    }, 500)
+  }
+
+  const handleTooltipEnter = () => {
+    if (leaveTimeoutRef.current) {
+      clearTimeout(leaveTimeoutRef.current)
+      leaveTimeoutRef.current = null
+    }
+  }
+
+  const handleTooltipLeave = () => {
+    if (leaveTimeoutRef.current) {
+      clearTimeout(leaveTimeoutRef.current)
+    }
+    
+    leaveTimeoutRef.current = setTimeout(() => {
+      setHoveredKeyword(null)
+      setPreviewData(null)
+      leaveTimeoutRef.current = null
+    }, 500)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current)
+      }
+      if (leaveTimeoutRef.current) {
+        clearTimeout(leaveTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    const prefetchKeywords = async () => {
+      const topKeywords = DUMMY_KEYWORDS.slice(0, 5)
+      
+      console.log('[Prefetch] Starting prefetch for top keywords...')
+      
+      for (const keyword of topKeywords) {
+        if (searchCache[keyword]) {
+          continue
+        }
+        
+        try {
+          const response = await axios.post(`${API_URL}/rag/search`, {
+            query: keyword,
+            k: 1
+          })
+          
+          const resultData = {
+            keyword,
+            sources: response.data.sources || []
+          }
+          
+          setSearchCache(prev => ({
+            ...prev,
+            [keyword]: resultData
+          }))
+          
+          console.log(`[Prefetch] Cached: ${keyword}`)
+          
+          await new Promise(resolve => setTimeout(resolve, 200))
+        } catch (error) {
+          console.error(`[Prefetch] Failed for ${keyword}:`, error)
+        }
+      }
+      
+      console.log('[Prefetch] Completed')
+    }
+    
+    const prefetchTimer = setTimeout(() => {
+      prefetchKeywords()
+    }, 1000)
+    
+    return () => clearTimeout(prefetchTimer)
+  }, [])
 
   return (
     <div className="rag-assistant-container">
@@ -96,6 +276,52 @@ export default function RAGAssistant({ messages: conversationMessages }) {
           <button className="clear-button" onClick={clearChat}>
             대화 초기화
           </button>
+        )}
+      </div>
+
+      {/* 키워드 리스트 */}
+      <div className="keyword-list-container">
+        <div className="keyword-list">
+          {DUMMY_KEYWORDS.map((keyword, idx) => (
+            <div
+              key={idx}
+              className="keyword-chip"
+              onMouseEnter={() => handleKeywordHover(keyword)}
+              onMouseLeave={handleKeywordLeave}
+            >
+              {keyword}
+            </div>
+          ))}
+        </div>
+
+        {/* 매뉴얼 프리뷰 툴팁 */}
+        {hoveredKeyword && (
+          <div 
+            className="keyword-preview-tooltip"
+            onMouseEnter={handleTooltipEnter}
+            onMouseLeave={handleTooltipLeave}
+          >
+            {previewLoading ? (
+              <div className="preview-loading-simple">검색 중...</div>
+            ) : previewData && previewData.keyword === hoveredKeyword ? (
+              previewData.error ? (
+                <div className="preview-error-simple">{previewData.error}</div>
+              ) : previewData.sources && previewData.sources.length > 0 ? (
+                previewData.sources.map((source, idx) => (
+                  <div key={idx} className="manual-content-simple">
+                    {source.page && source.page !== 'N/A' && (
+                      <div className="manual-page-simple">p.{source.page}</div>
+                    )}
+                    <div className="manual-text-simple">
+                      {source.content}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="preview-no-data-simple">매뉴얼을 찾을 수 없습니다</div>
+              )
+            ) : null}
+          </div>
         )}
       </div>
 
@@ -121,17 +347,31 @@ export default function RAGAssistant({ messages: conversationMessages }) {
               {msg.sources && msg.sources.length > 0 && (
                 <div className="rag-message-sources">
                   <div className="rag-sources-title">📚 참고 매뉴얼</div>
-                  {msg.sources.map((source, sourceIdx) => (
-                    <div key={sourceIdx} className="rag-source-item">
-                      <span className="rag-source-preview">
-                        {source.content.substring(0, 100)}
-                        {source.content.length > 100 && '...'}
-                      </span>
-                      {source.page && source.page !== 'N/A' && (
-                        <span className="rag-source-page">p.{source.page}</span>
-                      )}
-                    </div>
-                  ))}
+                  {msg.sources.map((source, sourceIdx) => {
+                    const sourceKey = `${idx}-${sourceIdx}`
+                    const isExpanded = expandedSources[sourceKey]
+                    
+                    return (
+                      <div key={sourceIdx} className="rag-source-item">
+                        <div className="rag-source-content-wrapper">
+                          <span className={`rag-source-preview ${isExpanded ? 'expanded' : 'collapsed'}`}>
+                            {source.content}
+                          </span>
+                          <div className="rag-source-footer">
+                            {source.page && source.page !== 'N/A' && (
+                              <span className="rag-source-page">p.{source.page}</span>
+                            )}
+                            <button 
+                              className="rag-source-toggle"
+                              onClick={() => toggleSource(idx, sourceIdx)}
+                            >
+                              {isExpanded ? '접기 ▲' : '더보기 ▼'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
