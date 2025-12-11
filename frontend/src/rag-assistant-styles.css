@@ -144,6 +144,11 @@
   border-left: 3px solid var(--danger);
 }
 
+.script-card.manual {
+  background: #f9fafb;
+  border-left: 3px solid #888;
+}
+
 .script-card.loading {
   background: var(--bg-light);
 }

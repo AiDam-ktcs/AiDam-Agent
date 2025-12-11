@@ -116,6 +116,47 @@ export default function RAGAssistant({ messages: conversationMessages }) {
     alert('스크립트가 클립보드에 복사되었습니다.')
   }
 
+  // 키워드 클릭 시 매뉴얼만 검색
+  const handleKeywordClick = async (keyword) => {
+    if (loading) return
+
+    setLoading(true)
+
+    try {
+      // 매뉴얼 검색 API 호출 (LLM 답변 생성 없이)
+      const response = await axios.post(`${API_URL}/rag/search`, {
+        query: keyword,
+        k: 2 // 가장 관련도 높은 1~2개 매뉴얼만 가져오기
+      })
+
+      // 매뉴얼 검색 결과를 스크립트로 표시
+      const manualScript = {
+        id: Date.now(),
+        title: `📖 "${keyword}" 관련 매뉴얼`,
+        content: response.data.sources?.map((s, idx) => 
+          `[매뉴얼 ${s.page && s.page !== 'N/A' ? `p.${s.page}` : idx + 1}]\n${s.content}`
+        ).join('\n\n') || '매뉴얼을 찾을 수 없습니다.',
+        sources: response.data.sources || [],
+        isManual: true
+      }
+      setScripts(prev => [...prev, manualScript])
+
+    } catch (error) {
+      console.error('Manual Search Error:', error)
+      const errorScript = {
+        id: Date.now(),
+        title: `"${keyword}" 매뉴얼 검색`,
+        content: error.response?.status === 503 
+          ? 'RAG Agent가 실행 중이지 않습니다. 매뉴얼 검색 기능을 사용할 수 없습니다.'
+          : '매뉴얼 검색 중 오류가 발생했습니다.',
+        sources: [],
+        isError: true
+      }
+      setScripts(prev => [...prev, errorScript])
+    } finally {
+      setLoading(false)
+    }
+  }
   return (
     <div className="rag-container">
       {/* Header */}
@@ -157,7 +198,7 @@ export default function RAGAssistant({ messages: conversationMessages }) {
         {scripts.map((script, idx) => (
           <div 
             key={script.id} 
-            className={`script-card ${idx === 0 ? 'highlight' : ''} ${script.isError ? 'error' : ''}`}
+            className={`script-card ${idx === 0 ? 'highlight' : ''} ${script.isError ? 'error' : ''} ${script.isManual ? 'manual' : ''}`}
           >
             <h3 className="script-title">
               {idx + 1}. {script.title}
@@ -165,12 +206,14 @@ export default function RAGAssistant({ messages: conversationMessages }) {
             <p className="script-content">{script.content}</p>
             
             <div className="script-footer">
-              <button 
-                className="use-script-btn"
-                onClick={() => useScript(script.content)}
-              >
-                스크립트 사용
-              </button>
+              {!script.isManual && (
+                <button 
+                  className="use-script-btn"
+                  onClick={() => useScript(script.content)}
+                >
+                  스크립트 사용
+                </button>
+              )}
               
               {script.sources && script.sources.length > 0 && (
                 <div className="source-links">
