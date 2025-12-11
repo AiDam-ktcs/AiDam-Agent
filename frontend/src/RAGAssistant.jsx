@@ -23,14 +23,8 @@ export default function RAGAssistant({ messages: conversationMessages }) {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [history, setHistory] = useState([])
-  const [hoveredKeyword, setHoveredKeyword] = useState(null)
-  const [previewData, setPreviewData] = useState(null)
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [searchCache, setSearchCache] = useState({})
   const [expandedSources, setExpandedSources] = useState({}) // 확장/축소 상태
   const messagesEndRef = useRef(null)
-  const hoverTimeoutRef = useRef(null)
-  const leaveTimeoutRef = useRef(null)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -119,154 +113,41 @@ export default function RAGAssistant({ messages: conversationMessages }) {
     }))
   }
 
-  // 키워드 호버 시 매뉴얼 내용 프리뷰
-  const handleKeywordHover = (keyword) => {
-    setHoveredKeyword(keyword)
-    
-    if (leaveTimeoutRef.current) {
-      clearTimeout(leaveTimeoutRef.current)
-      leaveTimeoutRef.current = null
-    }
-    
-    if (searchCache[keyword]) {
-      console.log(`[Cache Hit] ${keyword}`)
-      setPreviewData(searchCache[keyword])
-      return
-    }
-    
-    if (hoverTimeoutRef.current) {
-      clearTimeout(hoverTimeoutRef.current)
-    }
+  // 키워드 클릭 시 매뉴얼만 검색
+  const handleKeywordClick = async (keyword) => {
+    if (loading) return
 
-    hoverTimeoutRef.current = setTimeout(async () => {
-      setPreviewLoading(true)
-      try {
-        console.log(`[Cache Miss] Fetching: ${keyword}`)
-        
-        const response = await axios.post(`${API_URL}/rag/search`, {
-          query: keyword,
-          k: 1
-        })
+    setLoading(true)
 
-        const resultData = {
-          keyword,
-          sources: response.data.sources || []
-        }
-        
-        setPreviewData(resultData)
-        setSearchCache(prev => ({
-          ...prev,
-          [keyword]: resultData
-        }))
-      } catch (error) {
-        console.error('Preview Error:', error)
-        const errorData = {
-          keyword,
-          sources: [],
-          error: '매뉴얼을 불러올 수 없습니다.'
-        }
-        setPreviewData(errorData)
-        setSearchCache(prev => ({
-          ...prev,
-          [keyword]: errorData
-        }))
-      } finally {
-        setPreviewLoading(false)
+    try {
+      // 매뉴얼 검색 API 호출 (LLM 답변 생성 없이)
+      const response = await axios.post(`${API_URL}/rag/search`, {
+        query: keyword,
+        k: 2 // 가장 관련도 높은 1~2개 매뉴얼만 가져오기
+      })
+
+      // 매뉴얼만 표시 (고객 발화, AI 응답 없이)
+      const manualMessage = {
+        role: 'manual', // 매뉴얼 전용 타입
+        content: `📖 "${keyword}" 관련 매뉴얼`,
+        sources: response.data.sources || []
       }
-    }, 200)
-  }
+      setRagMessages(prev => [...prev, manualMessage])
 
-  const handleKeywordLeave = () => {
-    if (hoverTimeoutRef.current) {
-      clearTimeout(hoverTimeoutRef.current)
-      hoverTimeoutRef.current = null
-    }
-    
-    if (leaveTimeoutRef.current) {
-      clearTimeout(leaveTimeoutRef.current)
-    }
-    
-    leaveTimeoutRef.current = setTimeout(() => {
-      setHoveredKeyword(null)
-      setPreviewData(null)
-      leaveTimeoutRef.current = null
-    }, 500)
-  }
-
-  const handleTooltipEnter = () => {
-    if (leaveTimeoutRef.current) {
-      clearTimeout(leaveTimeoutRef.current)
-      leaveTimeoutRef.current = null
+    } catch (error) {
+      console.error('Manual Search Error:', error)
+      const errorMessage = {
+        role: 'manual',
+        content: `"${keyword}" 매뉴얼 검색 실패`,
+        sources: [],
+        error: true
+      }
+      setRagMessages(prev => [...prev, errorMessage])
+    } finally {
+      setLoading(false)
     }
   }
 
-  const handleTooltipLeave = () => {
-    if (leaveTimeoutRef.current) {
-      clearTimeout(leaveTimeoutRef.current)
-    }
-    
-    leaveTimeoutRef.current = setTimeout(() => {
-      setHoveredKeyword(null)
-      setPreviewData(null)
-      leaveTimeoutRef.current = null
-    }, 500)
-  }
-
-  useEffect(() => {
-    return () => {
-      if (hoverTimeoutRef.current) {
-        clearTimeout(hoverTimeoutRef.current)
-      }
-      if (leaveTimeoutRef.current) {
-        clearTimeout(leaveTimeoutRef.current)
-      }
-    }
-  }, [])
-
-  useEffect(() => {
-    const prefetchKeywords = async () => {
-      const topKeywords = DUMMY_KEYWORDS.slice(0, 5)
-      
-      console.log('[Prefetch] Starting prefetch for top keywords...')
-      
-      for (const keyword of topKeywords) {
-        if (searchCache[keyword]) {
-          continue
-        }
-        
-        try {
-          const response = await axios.post(`${API_URL}/rag/search`, {
-            query: keyword,
-            k: 1
-          })
-          
-          const resultData = {
-            keyword,
-            sources: response.data.sources || []
-          }
-          
-          setSearchCache(prev => ({
-            ...prev,
-            [keyword]: resultData
-          }))
-          
-          console.log(`[Prefetch] Cached: ${keyword}`)
-          
-          await new Promise(resolve => setTimeout(resolve, 200))
-        } catch (error) {
-          console.error(`[Prefetch] Failed for ${keyword}:`, error)
-        }
-      }
-      
-      console.log('[Prefetch] Completed')
-    }
-    
-    const prefetchTimer = setTimeout(() => {
-      prefetchKeywords()
-    }, 1000)
-    
-    return () => clearTimeout(prefetchTimer)
-  }, [])
 
   return (
     <div className="rag-assistant-container">
@@ -286,43 +167,12 @@ export default function RAGAssistant({ messages: conversationMessages }) {
             <div
               key={idx}
               className="keyword-chip"
-              onMouseEnter={() => handleKeywordHover(keyword)}
-              onMouseLeave={handleKeywordLeave}
+              onClick={() => handleKeywordClick(keyword)}
             >
               {keyword}
             </div>
           ))}
         </div>
-
-        {/* 매뉴얼 프리뷰 툴팁 */}
-        {hoveredKeyword && (
-          <div 
-            className="keyword-preview-tooltip"
-            onMouseEnter={handleTooltipEnter}
-            onMouseLeave={handleTooltipLeave}
-          >
-            {previewLoading ? (
-              <div className="preview-loading-simple">검색 중...</div>
-            ) : previewData && previewData.keyword === hoveredKeyword ? (
-              previewData.error ? (
-                <div className="preview-error-simple">{previewData.error}</div>
-              ) : previewData.sources && previewData.sources.length > 0 ? (
-                previewData.sources.map((source, idx) => (
-                  <div key={idx} className="manual-content-simple">
-                    {source.page && source.page !== 'N/A' && (
-                      <div className="manual-page-simple">p.{source.page}</div>
-                    )}
-                    <div className="manual-text-simple">
-                      {source.content}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="preview-no-data-simple">매뉴얼을 찾을 수 없습니다</div>
-              )
-            ) : null}
-          </div>
-        )}
       </div>
 
       <div className="rag-messages-container">
@@ -337,16 +187,29 @@ export default function RAGAssistant({ messages: conversationMessages }) {
         {ragMessages.map((msg, idx) => (
           <div
             key={idx}
-            className={`rag-message ${msg.role === 'user' ? 'rag-message-user' : 'rag-message-assistant'}`}
+            className={`rag-message ${
+              msg.role === 'user' ? 'rag-message-user' : 
+              msg.role === 'manual' ? 'rag-message-manual' : 
+              'rag-message-assistant'
+            }`}
           >
             <div className="rag-message-content">
-              <div className="rag-message-header">
-                {msg.role === 'user' ? '👤 고객 발화' : '🤖 AIDAM 가이드'}
-              </div>
-              <div className="rag-message-text">{msg.content}</div>
+              {msg.role !== 'manual' && (
+                <>
+                  <div className="rag-message-header">
+                    {msg.role === 'user' ? '👤 고객 발화' : '🤖 AIDAM 가이드'}
+                  </div>
+                  <div className="rag-message-text">{msg.content}</div>
+                </>
+              )}
+              {msg.role === 'manual' && (
+                <div className="rag-manual-header">{msg.content}</div>
+              )}
               {msg.sources && msg.sources.length > 0 && (
                 <div className="rag-message-sources">
-                  <div className="rag-sources-title">📚 참고 매뉴얼</div>
+                  {msg.role !== 'manual' && (
+                    <div className="rag-sources-title">📚 참고 매뉴얼</div>
+                  )}
                   {msg.sources.map((source, sourceIdx) => {
                     const sourceKey = `${idx}-${sourceIdx}`
                     const isExpanded = expandedSources[sourceKey]
@@ -373,6 +236,9 @@ export default function RAGAssistant({ messages: conversationMessages }) {
                     )
                   })}
                 </div>
+              )}
+              {msg.error && msg.sources.length === 0 && (
+                <div className="rag-error-message">매뉴얼을 찾을 수 없습니다.</div>
               )}
             </div>
           </div>
