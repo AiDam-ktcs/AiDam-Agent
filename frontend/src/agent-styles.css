@@ -817,7 +817,6 @@ html,
   border: 1px solid #bfdbfe;
   border-radius: var(--radius);
   padding: 1rem;
-  position: relative;
 }
 
 .script-content-box p {
@@ -825,33 +824,6 @@ html,
   line-height: 1.6;
   color: var(--text-primary);
   margin: 0;
-  padding-right: 2rem;
-}
-
-.copy-script-btn {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.375rem 0.75rem;
-  background: var(--primary);
-  color: white;
-  border: none;
-  border-radius: 6px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.copy-script-btn:hover {
-  background: var(--primary-dark);
-}
-
-.copy-script-btn .material-icons-outlined {
-  font-size: 14px;
 }
 
 .script-placeholder {

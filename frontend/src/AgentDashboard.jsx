@@ -399,12 +399,6 @@ export default function AgentDashboard() {
     }
   }
 
-  // 스크립트 복사
-  const copyPlanScript = () => {
-    navigator.clipboard.writeText(planScript)
-    alert('스크립트가 클립보드에 복사되었습니다.')
-  }
-
   // 키워드 하이라이트 함수
   const highlightKeywords = (text, keywords = ['비싸', '비싸요', '너무']) => {
     let result = text
@@ -668,10 +662,6 @@ export default function AgentDashboard() {
                       ) : planScript ? (
                         <div className="script-content-box">
                           <p>{planScript}</p>
-                          <button className="copy-script-btn" onClick={copyPlanScript}>
-                            <span className="material-icons-outlined">content_copy</span>
-                            복사
-                          </button>
                         </div>
                       ) : (
                         <div className="script-placeholder">

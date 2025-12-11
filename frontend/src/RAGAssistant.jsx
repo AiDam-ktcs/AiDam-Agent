@@ -110,12 +110,6 @@ export default function RAGAssistant({ messages: conversationMessages }) {
     }))
   }
 
-  const useScript = (content) => {
-    // 스크립트를 클립보드에 복사
-    navigator.clipboard.writeText(content)
-    alert('스크립트가 클립보드에 복사되었습니다.')
-  }
-
   // 키워드 클릭 시 매뉴얼만 검색
   const handleKeywordClick = async (keyword) => {
     if (loading) return
@@ -206,15 +200,6 @@ export default function RAGAssistant({ messages: conversationMessages }) {
             <p className="script-content">{script.content}</p>
             
             <div className="script-footer">
-              {!script.isManual && (
-                <button 
-                  className="use-script-btn"
-                  onClick={() => useScript(script.content)}
-                >
-                  스크립트 사용
-                </button>
-              )}
-              
               {script.sources && script.sources.length > 0 && (
                 <div className="source-links">
                   {script.sources.map((source, sourceIdx) => {
