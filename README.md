@@ -61,6 +61,12 @@ pip install -r requirements.txt
 # .env 파일 생성 후 OPENAI_API_KEY 설정 필요
 uvicorn main:app --host 0.0.0.0 --port 8000
 
+# 터미널 3: Upsell Agent (업셀링 판단)
+cd backend/agents/upsell-agent
+pip install -r requirements.txt
+# .env 파일 생성 후 OPENAI_API_KEY 설정 필요
+uvicorn main:app --host 0.0.0.0 --port 8008
+
 # 터미널 3: 메인 백엔드
 cd backend
 npm start    # 포트 3000
