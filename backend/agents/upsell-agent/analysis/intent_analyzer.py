@@ -18,21 +18,28 @@ from models.state import (
 load_dotenv()
 
 
-# 요금제 데이터베이스 (실제로는 DB에서 가져옴)
-PLAN_DATABASE = {
-    "basic": [
-        {"plan_name": "알뜰 LTE", "monthly_fee": 15000, "data_limit": "3GB", "call_limit": "100분", "plan_tier": "basic"},
-        {"plan_name": "실속 LTE", "monthly_fee": 19000, "data_limit": "5GB", "call_limit": "무제한", "plan_tier": "basic"},
-    ],
-    "standard": [
-        {"plan_name": "LTE30+", "monthly_fee": 35000, "data_limit": "10GB", "call_limit": "무제한", "plan_tier": "standard"},
-        {"plan_name": "알뜰 5G", "monthly_fee": 25000, "data_limit": "10GB", "call_limit": "무제한", "plan_tier": "standard"},
-    ],
-    "premium": [
-        {"plan_name": "5G 프리미엄", "monthly_fee": 55000, "data_limit": "무제한", "call_limit": "무제한", "plan_tier": "premium"},
-        {"plan_name": "5G 프리미엄+", "monthly_fee": 75000, "data_limit": "무제한", "call_limit": "무제한", "plan_tier": "premium"},
-    ]
-}
+# 요금제 데이터 로드
+from pathlib import Path
+
+def load_pricing_plans():
+    """pricing_plan.json에서 요금제 정보를 로드합니다."""
+    try:
+        current_dir = Path(__file__).parent.parent
+        plan_file_path = current_dir / "docs" / "pricing_plan.json"
+        
+        with open(plan_file_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"요금제 데이터 로드 중 오류 발생: {e}")
+        # 파일이 없을 경우를 대비한 기본값 (fallback)
+        return {
+            "general": [
+                {"plan_name": "일반 LTE 무제한", "monthly_fee": 49900, "data_limit": "LTE 무제한", "call_limit": "무제한", "plan_tier": "standard"},
+                {"plan_name": "일반 5G 무제한", "monthly_fee": 69000, "data_limit": "5G 무제한", "call_limit": "무제한", "plan_tier": "premium"}
+            ]
+        }
+
+PLAN_DATABASE = load_pricing_plans()
 
 
 class IntentAnalyzerGraph:
@@ -229,41 +236,88 @@ RAG 에이전트 제안 내용:
             }
     
     def _recommend_plans(self, state: UpsellState) -> Dict[str, Any]:
-        """요금제 추천"""
+        """요금제 추천 (세그먼트 및 등급 기반)"""
         current_plan = state["current_plan"]
         upsell_possibility = state["upsell_possibility"]
         customer_intent = state["customer_intent"]
+        customer_info = state.get("customer_info", {}) or {}
         
         current_tier = current_plan.get("plan_tier", "standard")
-        current_fee = current_plan.get("monthly_fee", 0)
+        
+        # 1. 고객 세그먼트 결정
+        segment = "general" # 기본값
+        
+        # customer_info에서 세그먼트 정보 확인
+        if "segment" in customer_info and customer_info["segment"] in PLAN_DATABASE:
+            segment = customer_info["segment"]
+        elif "age" in customer_info:
+            try:
+                age = int(customer_info["age"])
+                if age < 20:
+                    segment = "youth"
+                elif age >= 65:
+                    segment = "senior"
+            except (ValueError, TypeError):
+                pass
+        
+        if customer_info.get("is_soldier"):
+            segment = "military"
+            
+        # 해당 세그먼트의 전체 요금제 목록 가져오기
+        available_plans = PLAN_DATABASE.get(segment, PLAN_DATABASE.get("general", []))
+        
+        # 등급별 분류
+        basic_plans = [p for p in available_plans if p.get("plan_tier") == "basic"]
+        standard_plans = [p for p in available_plans if p.get("plan_tier") == "standard"]
+        premium_plans = [p for p in available_plans if p.get("plan_tier") == "premium"]
         
         recommended_plans = []
         
+        # 2. 업셀링/다운그레이드 로직에 따른 추천
         if upsell_possibility in ["high", "medium"]:
             # 업셀링 가능 - 상위 요금제 추천
             if current_tier == "basic":
-                recommended_plans = PLAN_DATABASE["standard"]
+                recommended_plans = standard_plans
+                # 만약 standard가 없으면 premium 추천
+                if not recommended_plans:
+                    recommended_plans = premium_plans
             elif current_tier == "standard":
-                recommended_plans = PLAN_DATABASE["premium"]
+                recommended_plans = premium_plans
             else:
-                # 이미 premium이면 같은 등급 다른 요금제
-                recommended_plans = [p for p in PLAN_DATABASE["premium"] 
+                # 이미 premium이면 같은 등급 내 더 비싼 요금제나 다른 혜택
+                recommended_plans = [p for p in premium_plans 
                                     if p["plan_name"] != current_plan.get("plan_name")]
         
         elif customer_intent == "price_sensitive" or customer_intent == "downgrade_wanted":
-            # 다운그레이드 또는 가격 민감 - 하위 요금제 추천
+            # 다운그레이드 - 하위 요금제 추천
             if current_tier == "premium":
-                recommended_plans = PLAN_DATABASE["standard"]
+                recommended_plans = standard_plans
+                if not recommended_plans:
+                    recommended_plans = basic_plans
             elif current_tier == "standard":
-                recommended_plans = PLAN_DATABASE["basic"]
+                recommended_plans = basic_plans
             else:
-                # 이미 basic이면 같은 등급 다른 요금제
-                recommended_plans = [p for p in PLAN_DATABASE["basic"] 
-                                    if p["plan_name"] != current_plan.get("plan_name")]
+                # 이미 basic이면 더 저렴한 basic 찾기
+                current_fee = current_plan.get("monthly_fee", 0)
+                recommended_plans = [p for p in basic_plans 
+                                    if p.get("monthly_fee", 0) < current_fee]
         
         else:
-            # 현재 등급 내 다른 요금제
-            recommended_plans = [p for p in PLAN_DATABASE.get(current_tier, []) 
+            # 현재 등급과 유사한 요금제 (중립)
+            if current_tier == "basic":
+                recommended_plans = basic_plans
+            elif current_tier == "standard":
+                recommended_plans = standard_plans
+            else:
+                recommended_plans = premium_plans
+                
+            # 현재 요금제 제외
+            recommended_plans = [p for p in recommended_plans 
+                                if p["plan_name"] != current_plan.get("plan_name")]
+        
+        # 결과가 없으면 전체 목록에서 다른 것 추천
+        if not recommended_plans:
+             recommended_plans = [p for p in available_plans 
                                 if p["plan_name"] != current_plan.get("plan_name")]
         
         return {

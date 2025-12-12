@@ -1,0 +1,146 @@
+{
+    "general": [
+        {
+            "plan_name": "일반 최저가 20GB",
+            "monthly_fee": 29900,
+            "data_limit": "20GB",
+            "call_limit": "무제한",
+            "benefits": "없음",
+            "plan_tier": "basic"
+        },
+        {
+            "plan_name": "일반 저가 30GB",
+            "monthly_fee": 34900,
+            "data_limit": "30GB",
+            "call_limit": "무제한",
+            "benefits": "없음",
+            "plan_tier": "basic"
+        },
+        {
+            "plan_name": "일반 50GB",
+            "monthly_fee": 39900,
+            "data_limit": "50GB",
+            "call_limit": "무제한",
+            "benefits": "공공 와이파이",
+            "plan_tier": "standard"
+        },
+        {
+            "plan_name": "일반 LTE 무제한",
+            "monthly_fee": 49900,
+            "data_limit": "LTE 무제한",
+            "call_limit": "무제한",
+            "benefits": "스트리밍 절약모드",
+            "plan_tier": "standard"
+        },
+        {
+            "plan_name": "일반 5G 무제한",
+            "monthly_fee": 69000,
+            "data_limit": "5G 무제한",
+            "call_limit": "무제한",
+            "benefits": "테더링 30GB",
+            "plan_tier": "premium"
+        },
+        {
+            "plan_name": "일반 프리미엄 5G+OTT",
+            "monthly_fee": 89000,
+            "data_limit": "5G 무제한",
+            "call_limit": "무제한",
+            "benefits": "넷플릭스 스탠다드, 디즈니플러스, 유튜브 프리미엄, 테더링 50GB",
+            "plan_tier": "premium"
+        }
+    ],
+    "youth": [
+        {
+            "plan_name": "청소년 최저가 20GB",
+            "monthly_fee": 24900,
+            "data_limit": "20GB",
+            "call_limit": "무제한",
+            "benefits": "스팸차단 강화",
+            "plan_tier": "basic"
+        },
+        {
+            "plan_name": "청소년 30GB",
+            "monthly_fee": 27900,
+            "data_limit": "30GB",
+            "call_limit": "무제한",
+            "benefits": "스팸차단 강화",
+            "plan_tier": "basic"
+        },
+        {
+            "plan_name": "청소년 무제한",
+            "monthly_fee": 34900,
+            "data_limit": "LTE 무제한",
+            "call_limit": "무제한",
+            "benefits": "스트리밍 절약모드",
+            "plan_tier": "standard"
+        },
+        {
+            "plan_name": "청소년 프리미엄 OTT",
+            "monthly_fee": 44900,
+            "data_limit": "무제한",
+            "call_limit": "무제한",
+            "benefits": "유튜브 프리미엄",
+            "plan_tier": "premium"
+        }
+    ],
+    "military": [
+        {
+            "plan_name": "군인 최저가 20GB",
+            "monthly_fee": 19900,
+            "data_limit": "20GB",
+            "call_limit": "무제한",
+            "benefits": "없음",
+            "plan_tier": "basic"
+        },
+        {
+            "plan_name": "군인 30GB",
+            "monthly_fee": 22900,
+            "data_limit": "30GB",
+            "call_limit": "무제한",
+            "benefits": "없음",
+            "plan_tier": "basic"
+        },
+        {
+            "plan_name": "군인 프리미엄 OTT",
+            "monthly_fee": 29900,
+            "data_limit": "무제한",
+            "call_limit": "무제한",
+            "benefits": "유튜브 프리미엄, 넷플릭스 베이직",
+            "plan_tier": "premium"
+        }
+    ],
+    "senior": [
+        {
+            "plan_name": "노인 최저가 10GB",
+            "monthly_fee": 27900,
+            "data_limit": "10GB",
+            "call_limit": "무제한",
+            "benefits": "안심 연락 서비스",
+            "plan_tier": "basic"
+        },
+        {
+            "plan_name": "노인 20GB",
+            "monthly_fee": 29900,
+            "data_limit": "20GB",
+            "call_limit": "무제한",
+            "benefits": "안심 연락 서비스",
+            "plan_tier": "basic"
+        },
+        {
+            "plan_name": "노인 무제한",
+            "monthly_fee": 37900,
+            "data_limit": "무제한",
+            "call_limit": "무제한",
+            "benefits": "안심서비스, 위기감지",
+            "plan_tier": "standard"
+        },
+        {
+            "plan_name": "노인 프리미엄 OTT",
+            "monthly_fee": 47900,
+            "data_limit": "무제한",
+            "call_limit": "무제한",
+            "benefits": "넷플릭스 베이직, 안심서비스",
+            "plan_tier": "premium"
+        }
+    ]
+}
