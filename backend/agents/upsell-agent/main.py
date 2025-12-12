@@ -2,6 +2,7 @@
 import os
 import sys
 from pathlib import Path
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -16,30 +17,16 @@ from analysis.intent_analyzer import IntentAnalyzerGraph
 # 환경 변수 로드
 load_dotenv()
 
-app = FastAPI(
-    title="AIDAM 업셀링 판단 API", 
-    version="1.0.0",
-    description="고객 대화를 분석하여 업셀링 가능성을 판단하는 에이전트"
-)
-
-# CORS 설정
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # 전역 변수
 intent_analyzer: Optional[IntentAnalyzerGraph] = None
 
 
-@app.on_event("startup")
-async def startup_event():
-    """애플리케이션 시작 시 초기화"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """애플리케이션 생명주기 관리 (시작/종료 이벤트)"""
     global intent_analyzer
     
+    # Startup
     try:
         # API 키 확인
         api_key = os.getenv("OPENAI_API_KEY")
@@ -61,6 +48,28 @@ async def startup_event():
     except Exception as e:
         print(f"\n❌ 초기화 중 오류 발생: {e}")
         raise
+    
+    yield
+    
+    # Shutdown (필요시 정리 작업)
+    print("서버 종료 중...")
+
+
+app = FastAPI(
+    title="AIDAM 업셀링 판단 API", 
+    version="1.0.0",
+    description="고객 대화를 분석하여 업셀링 가능성을 판단하는 에이전트",
+    lifespan=lifespan
+)
+
+# CORS 설정
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],  # 모든 HTTP 메서드 허용 (OPTIONS 포함)
+    allow_headers=["*"],  # 모든 헤더 허용
+)
 
 
 # 요청/응답 모델
