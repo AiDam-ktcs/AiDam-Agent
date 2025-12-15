@@ -24,12 +24,39 @@ export default function AgentDashboard() {
   const [isPaused, setIsPaused] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState('intent') // 'intent', 'report'
 
-  // 고객 정보 (실제로는 API에서 가져올 수 있음)
-  const [customerInfo] = useState({
-    name: '홍길동',
-    phone: '010-1111-2222',
-    plan: 'LTE30+'
-  })
+  // 고객 정보 (Backend Integration)
+  const [customerInfo, setCustomerInfo] = useState(null)
+
+  // Call Status Polling
+  useEffect(() => {
+    const pollCallStatus = async () => {
+      try {
+        const resp = await fetch(`${API_URL}/active-call`)
+        const data = await resp.json()
+        if (data.active && data.call) {
+          setCallStatus('active')
+          setCustomerInfo({
+            name: data.call.customer['이름'] || 'Unknown',
+            phone: data.call.customer['번호'],
+            plan: data.call.customer['요금제'] || 'Unknown',
+            age: data.call.customer['나이'],
+            usage: {
+              prev: data.call.customer['전월 데이터'],
+              curr: data.call.customer['현월 데이터']
+            }
+          })
+          setCurrentPhoneNumber(data.call.customer['번호'])
+        } else if (callStatus === 'active') { // Call ended externally
+          // Optional: Handle external call end
+        }
+      } catch (err) {
+        console.error('Failed to poll call status:', err)
+      }
+    }
+
+    const interval = setInterval(pollCallStatus, 2000)
+    return () => clearInterval(interval)
+  }, [callStatus])
 
   // 추천 요금제 (AI가 분석해서 제공)
   const [recommendedPlans, setRecommendedPlans] = useState([])
@@ -86,8 +113,8 @@ export default function AgentDashboard() {
     try {
       const payload = {
         conversation_history: messages.map(m => ({ role: m.role, content: m.content })),
-        current_plan_name: customerInfo.plan,
-        current_plan_fee: 35000 // 예시 가격
+        current_plan_name: customerInfo?.plan || 'Unknown',
+        current_plan_fee: 35000 // TODO: Fetch from pricing plan
       }
 
       const response = await fetch(`${UPSELL_AGENT_URL}/analyze/quick`, {
@@ -359,8 +386,38 @@ export default function AgentDashboard() {
     link.click()
   }
 
-  const handleEndCall = () => {
-    setCallStatus('ended')
+  const handleEndCall = async () => {
+    try {
+      await fetch(`${API_URL}/call/end`, { method: 'POST' })
+      setCallStatus('ended')
+      setCustomerInfo(null)
+      setMessages([])
+      setCurrentReport(null)
+    } catch (err) {
+      console.error('Failed to end call:', err)
+    }
+  }
+
+  // Incoming Call Simulation (Dev Tool)
+  const simulateIncomingCall = async () => {
+    const phoneNumber = prompt('전화번호를 입력하세요 (예: 010-9093-7189):', '010-9093-7189')
+    if (!phoneNumber) return
+
+    try {
+      const resp = await fetch(`${API_URL}/stt/incoming-call`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_number: phoneNumber })
+      })
+      const data = await resp.json()
+      if (data.success) {
+        setCallStatus('ringing')
+        // Automatically answer for demo purposes after 1.5s
+        setTimeout(() => setCallStatus('active'), 1500)
+      }
+    } catch (err) {
+      alert('오류 발생: ' + err.message)
+    }
   }
 
   // 요금제 선택 핸들러
@@ -423,6 +480,15 @@ export default function AgentDashboard() {
           >
             <span className="material-icons-outlined">call_end</span>
             <span>End Call</span>
+          </button>
+          {/* Dev Tool: Simulate Call */}
+          <button
+            className="sim-call-btn"
+            onClick={simulateIncomingCall}
+            style={{ marginLeft: '10px', padding: '5px 10px', background: '#444', border: 'none', color: '#fff', borderRadius: '4px', cursor: 'pointer' }}
+          >
+            <span className="material-icons-outlined" style={{ fontSize: '16px', verticalAlign: 'middle', marginRight: '4px' }}>ring_volume</span>
+            Simulate Call
           </button>
         </div>
 
@@ -493,18 +559,32 @@ export default function AgentDashboard() {
                   </button>
                 </div>
                 <div className="info-grid">
-                  <div className="info-row">
-                    <span className="info-label">고객명:</span>
-                    <span className="info-value">{customerInfo.name}</span>
-                  </div>
-                  <div className="info-row">
-                    <span className="info-label">전화번호:</span>
-                    <span className="info-value">{customerInfo.phone}</span>
-                  </div>
-                  <div className="info-row">
-                    <span className="info-label">현재 요금제:</span>
-                    <span className="info-value plan-value">{customerInfo.plan}</span>
-                  </div>
+                  {customerInfo ? (
+                    <>
+                      <div className="info-row">
+                        <span className="info-label">고객명:</span>
+                        <span className="info-value">{customerInfo.name} ({customerInfo.age || '?'}세)</span>
+                      </div>
+                      <div className="info-row">
+                        <span className="info-label">전화번호:</span>
+                        <span className="info-value">{customerInfo.phone}</span>
+                      </div>
+                      <div className="info-row">
+                        <span className="info-label">현재 요금제:</span>
+                        <span className="info-value plan-value">{customerInfo.plan}</span>
+                      </div>
+                      <div className="info-row">
+                        <span className="info-label">데이터 사용:</span>
+                        <span className="info-value" style={{ fontSize: '0.85em', color: '#aaa' }}>
+                          전월: {customerInfo.usage?.prev || '-'}, 현월: {customerInfo.usage?.curr || '-'}
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="no-customer-info" style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
+                      <p>통화 대기 중...</p>
+                    </div>
+                  )}
                 </div>
               </div>
 

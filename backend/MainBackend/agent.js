@@ -16,6 +16,178 @@ app.use((req, res, next) => {
   next();
 });
 
+// --- Data Management ---
+const DATA_DIR = path.join(__dirname, 'docs');
+let CUSTOMERS = [];
+let PRICING_PLANS = {};
+let ACTIVE_CALL = null; // { customer: {}, startTime: ... }
+
+// Load Customer Data (CSV)
+function loadCustomers() {
+  try {
+    const csvPath = path.join(DATA_DIR, 'customer_data.csv');
+    if (fs.existsSync(csvPath)) {
+      const data = fs.readFileSync(csvPath, 'utf-8');
+      const lines = data.trim().split('\n');
+      const headers = lines[0].split(',').map(h => h.trim());
+
+      CUSTOMERS = lines.slice(1).map(line => {
+        const values = line.split(',');
+        const customer = {};
+        headers.forEach((header, index) => {
+          customer[header] = values[index]?.trim();
+        });
+        return customer;
+      });
+      console.log(`[System] Loaded ${CUSTOMERS.length} customers.`);
+    } else {
+      console.warn('[System] customer_data.csv not found.');
+    }
+  } catch (err) {
+    console.error('[System] Failed to load customers:', err);
+  }
+}
+
+// Load Pricing Plans (JSON)
+function loadPricingPlans() {
+  try {
+    const jsonPath = path.join(DATA_DIR, 'pricing_plan.json');
+    if (fs.existsSync(jsonPath)) {
+      PRICING_PLANS = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+      console.log('[System] Loaded pricing plans.');
+    } else {
+      console.warn('[System] pricing_plan.json not found.');
+    }
+  } catch (err) {
+    console.error('[System] Failed to load pricing plans:', err);
+  }
+}
+
+// Initial Load
+loadCustomers();
+loadPricingPlans();
+
+// --- Customer & Call Endpoints ---
+
+/**
+ * GET /customers
+ * Search customers by name or phone
+ */
+app.get('/customers', (req, res) => {
+  const { query } = req.query;
+  if (!query) {
+    return res.json({ customers: CUSTOMERS.slice(0, 50) }); // Limit to 50 for safety
+  }
+
+  const lowerQuery = query.toLowerCase();
+  const results = CUSTOMERS.filter(c =>
+    c['이름']?.toLowerCase().includes(lowerQuery) ||
+    c['번호']?.includes(lowerQuery)
+  );
+
+  res.json({ customers: results });
+});
+
+/**
+ * POST /customers
+ * Update customer data (In-Memory Only for now)
+ */
+app.post('/customers', (req, res) => {
+  try {
+    const { phone, updates } = req.body;
+    if (!phone) return res.status(400).json({ error: 'Phone number required' });
+
+    const index = CUSTOMERS.findIndex(c => c['번호'] === phone);
+    if (index === -1) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+
+    // Update fields
+    CUSTOMERS[index] = { ...CUSTOMERS[index], ...updates };
+
+    // Update active call if it matches
+    if (ACTIVE_CALL && ACTIVE_CALL.customer['번호'] === phone) {
+      ACTIVE_CALL.customer = CUSTOMERS[index];
+    }
+
+    res.json({ success: true, customer: CUSTOMERS[index] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /pricing
+ * Get all pricing plans
+ */
+app.get('/pricing', (req, res) => {
+  res.json(PRICING_PLANS);
+});
+
+/**
+ * POST /stt/incoming-call
+ * Simulate Incoming Call (STT Module Trigger)
+ */
+app.post('/stt/incoming-call', (req, res) => {
+  const { phone_number } = req.body;
+  if (!phone_number) return res.status(400).json({ error: 'phone_number required' });
+
+  // Find Customer
+  const customer = CUSTOMERS.find(c => c['번호'] === phone_number);
+
+  ACTIVE_CALL = {
+    status: 'ringing',
+    customer: customer || { '이름': 'Unknown', '번호': phone_number },
+    startTime: new Date().toISOString()
+  };
+
+  console.log(`[Call] Incoming call from ${phone_number} (${ACTIVE_CALL.customer['이름']})`);
+  res.json({ success: true, call: ACTIVE_CALL });
+});
+
+/**
+ * POST /call/outbound
+ * Initiate Outbound Call
+ */
+app.post('/call/outbound', (req, res) => {
+  const { phone_number } = req.body;
+  if (!phone_number) return res.status(400).json({ error: 'phone_number required' });
+
+  const customer = CUSTOMERS.find(c => c['번호'] === phone_number);
+
+  ACTIVE_CALL = {
+    status: 'dialing',
+    customer: customer || { '이름': 'Unknown', '번호': phone_number },
+    startTime: new Date().toISOString()
+  };
+
+  console.log(`[Call] Dialing to ${phone_number}...`);
+  res.json({ success: true, call: ACTIVE_CALL });
+});
+
+/**
+ * GET /active-call
+ * Get current active call status
+ */
+app.get('/active-call', (req, res) => {
+  res.json({
+    active: !!ACTIVE_CALL,
+    call: ACTIVE_CALL
+  });
+});
+
+/**
+ * POST /item/call/end
+ * End current call
+ */
+app.post('/call/end', (req, res) => {
+  if (ACTIVE_CALL) {
+    console.log(`[Call] Ended call with ${ACTIVE_CALL.customer['번호']}`);
+    ACTIVE_CALL = null;
+  }
+  res.json({ success: true });
+});
+
 // 서버 포트
 const PORT = process.env.PORT || 3000;
 
@@ -36,11 +208,11 @@ async function checkAgentHealth(agentKey) {
 
   try {
     const url = agentsConfig.buildUrl(agentKey, 'health');
-    const response = await fetch(url, { 
+    const response = await fetch(url, {
       timeout: 5000,
       signal: AbortSignal.timeout(5000)
     });
-    
+
     if (response.ok) {
       const data = await response.json();
       return { ok: true, status: 'healthy', agent: agent.name, data };
@@ -57,13 +229,13 @@ async function checkAgentHealth(agentKey) {
  */
 async function callReportAgent(endpoint, body, isStreaming = false) {
   const agent = agentsConfig.getAgent('report');
-  
+
   if (!agent.enabled) {
     throw new Error('Report Agent is disabled');
   }
 
   const url = agentsConfig.buildUrl('report', endpoint);
-  
+
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -126,9 +298,9 @@ app.get('/models', async (req, res) => {
 
     // Report Agent의 LLM 설정 정보 반환
     const healthCheck = await checkAgentHealth('report');
-    
+
     if (healthCheck.ok && healthCheck.data) {
-      res.json({ 
+      res.json({
         models: [{
           provider: healthCheck.data.provider,
           model: healthCheck.data.model,
@@ -151,7 +323,7 @@ app.get('/models', async (req, res) => {
 app.post('/analyze', async (req, res) => {
   try {
     const { messages, metadata } = req.body;
-    
+
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages array is required' });
     }
@@ -164,7 +336,7 @@ app.post('/analyze', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[Orchestrator] Analysis error:', err);
-    res.status(500).json({ 
+    res.status(500).json({
       error: err.message || 'Analysis failed',
       service: 'Main Backend'
     });
@@ -178,7 +350,7 @@ app.post('/analyze', async (req, res) => {
 app.post('/generate-report', async (req, res) => {
   try {
     const { analysis, format = 'markdown' } = req.body;
-    
+
     if (!analysis) {
       return res.status(400).json({ error: 'analysis object is required' });
     }
@@ -206,7 +378,7 @@ app.post('/generate-report', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[Orchestrator] Report generation error:', err);
-    res.status(500).json({ 
+    res.status(500).json({
       error: err.message || 'Report generation failed',
       service: 'Main Backend'
     });
@@ -220,7 +392,7 @@ app.post('/generate-report', async (req, res) => {
 app.post('/process', async (req, res) => {
   try {
     const { messages, metadata } = req.body;
-    
+
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages array is required' });
     }
@@ -238,14 +410,14 @@ app.post('/process', async (req, res) => {
     // Report Agent의 SSE 스트림을 클라이언트로 전달
     response.body.on('data', (chunk) => {
       const chunkStr = chunk.toString();
-      
+
       // SSE 데이터 파싱 및 보고서 저장 처리
       if (chunkStr.includes('"step":5') || chunkStr.includes('"step": 5')) {
         try {
           const dataMatch = chunkStr.match(/data: ({.*})/);
           if (dataMatch) {
             const eventData = JSON.parse(dataMatch[1]);
-            
+
             // 최종 결과에서 보고서 저장
             if (eventData.data && eventData.data.success && eventData.data.reportId) {
               const reportData = {
@@ -283,12 +455,12 @@ app.post('/process', async (req, res) => {
 
   } catch (err) {
     console.error('[Orchestrator] Process error:', err);
-    
+
     const errorMessage = err.message || '처리 중 오류가 발생했습니다.';
-    
-    res.write(`data: ${JSON.stringify({ 
-      step: -1, 
-      message: 'Error', 
+
+    res.write(`data: ${JSON.stringify({
+      step: -1,
+      message: 'Error',
       error: errorMessage,
       service: 'Main Backend'
     })}\n\n`);
@@ -336,7 +508,7 @@ app.get('/reports', (req, res) => {
 app.get('/reports/:id', (req, res) => {
   try {
     const reportPath = path.join(REPORTS_DIR, `${req.params.id}.json`);
-    
+
     if (!fs.existsSync(reportPath)) {
       return res.status(404).json({ error: 'Report not found' });
     }
@@ -356,7 +528,7 @@ app.get('/reports/:id', (req, res) => {
 app.delete('/reports/:id', (req, res) => {
   try {
     const reportPath = path.join(REPORTS_DIR, `${req.params.id}.json`);
-    
+
     if (!fs.existsSync(reportPath)) {
       return res.status(404).json({ error: 'Report not found' });
     }
@@ -377,16 +549,16 @@ app.delete('/reports/:id', (req, res) => {
 app.post('/rag/chat', async (req, res) => {
   try {
     const { message, history } = req.body;
-    
+
     if (!message) {
       return res.status(400).json({ error: 'message is required' });
     }
 
     // RAG Agent 헬스체크
     const ragAgentHealth = await checkAgentHealth('rag');
-    
+
     if (!ragAgentHealth.ok) {
-      return res.status(503).json({ 
+      return res.status(503).json({
         error: 'RAG Agent is not available',
         detail: 'RAG Agent가 실행 중이지 않습니다. 상담 가이드 기능을 사용할 수 없습니다.',
         service: 'Main Backend'
@@ -397,7 +569,7 @@ app.post('/rag/chat', async (req, res) => {
 
     const ragAgent = agentsConfig.getAgent('rag');
     const url = agentsConfig.buildUrl('rag', 'chat');
-    
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -414,22 +586,22 @@ app.post('/rag/chat', async (req, res) => {
     }
 
     const result = await response.json();
-    
+
     console.log(`[Orchestrator] RAG Agent response received`);
     res.json(result);
 
   } catch (err) {
     console.error('[Orchestrator] RAG chat error:', err);
-    
+
     if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
+      return res.status(503).json({
         error: 'RAG Agent에 연결할 수 없습니다.',
         detail: 'RAG Agent가 실행 중인지 확인해주세요 (포트 8000).',
         service: 'Main Backend'
       });
     }
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       error: err.message || 'RAG chat failed',
       service: 'Main Backend'
     });
@@ -443,16 +615,16 @@ app.post('/rag/chat', async (req, res) => {
 app.post('/rag/search', async (req, res) => {
   try {
     const { query, k = 3 } = req.body;
-    
+
     if (!query) {
       return res.status(400).json({ error: 'query is required' });
     }
 
     // RAG Agent 헬스체크
     const ragAgentHealth = await checkAgentHealth('rag');
-    
+
     if (!ragAgentHealth.ok) {
-      return res.status(503).json({ 
+      return res.status(503).json({
         error: 'RAG Agent is not available',
         detail: 'RAG Agent가 실행 중이지 않습니다.',
         service: 'Main Backend'
@@ -463,7 +635,7 @@ app.post('/rag/search', async (req, res) => {
 
     const ragAgent = agentsConfig.getAgent('rag');
     const url = agentsConfig.buildUrl('rag', 'search');
-    
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -480,22 +652,22 @@ app.post('/rag/search', async (req, res) => {
     }
 
     const result = await response.json();
-    
+
     console.log(`[Orchestrator] RAG Agent search response received`);
     res.json(result);
 
   } catch (err) {
     console.error('[Orchestrator] RAG search error:', err);
-    
+
     if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
+      return res.status(503).json({
         error: 'RAG Agent에 연결할 수 없습니다.',
         detail: 'RAG Agent가 실행 중인지 확인해주세요 (포트 8000).',
         service: 'Main Backend'
       });
     }
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       error: err.message || 'RAG search failed',
       service: 'Main Backend'
     });
@@ -509,7 +681,7 @@ app.post('/rag/search', async (req, res) => {
 app.post('/upsell/analyze', async (req, res) => {
   try {
     const { conversation_history, current_plan, rag_suggestion, customer_info } = req.body;
-    
+
     if (!conversation_history || !Array.isArray(conversation_history)) {
       return res.status(400).json({ error: 'conversation_history array is required' });
     }
@@ -520,9 +692,9 @@ app.post('/upsell/analyze', async (req, res) => {
 
     // Upsell Agent 헬스체크
     const upsellAgentHealth = await checkAgentHealth('upsell');
-    
+
     if (!upsellAgentHealth.ok) {
-      return res.status(503).json({ 
+      return res.status(503).json({
         error: 'Upsell Agent is not available',
         detail: 'Upsell Agent가 실행 중이지 않습니다. 업셀링 분석 기능을 사용할 수 없습니다.',
         service: 'Main Backend'
@@ -533,7 +705,7 @@ app.post('/upsell/analyze', async (req, res) => {
 
     const upsellAgent = agentsConfig.getAgent('upsell');
     const url = agentsConfig.buildUrl('upsell', 'analyze');
-    
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -552,22 +724,22 @@ app.post('/upsell/analyze', async (req, res) => {
     }
 
     const result = await response.json();
-    
+
     console.log(`[Orchestrator] Upsell Agent response received`);
     res.json(result);
 
   } catch (err) {
     console.error('[Orchestrator] Upsell analysis error:', err);
-    
+
     if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
+      return res.status(503).json({
         error: 'Upsell Agent에 연결할 수 없습니다.',
         detail: 'Upsell Agent가 실행 중인지 확인해주세요 (포트 8008).',
         service: 'Main Backend'
       });
     }
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       error: err.message || 'Upsell analysis failed',
       service: 'Main Backend'
     });
@@ -581,16 +753,16 @@ app.post('/upsell/analyze', async (req, res) => {
 app.post('/upsell/analyze/quick', async (req, res) => {
   try {
     const { conversation_history, current_plan_name, current_plan_fee } = req.body;
-    
+
     if (!conversation_history || !Array.isArray(conversation_history)) {
       return res.status(400).json({ error: 'conversation_history array is required' });
     }
 
     // Upsell Agent 헬스체크
     const upsellAgentHealth = await checkAgentHealth('upsell');
-    
+
     if (!upsellAgentHealth.ok) {
-      return res.status(503).json({ 
+      return res.status(503).json({
         error: 'Upsell Agent is not available',
         detail: 'Upsell Agent가 실행 중이지 않습니다.',
         service: 'Main Backend'
@@ -601,7 +773,7 @@ app.post('/upsell/analyze/quick', async (req, res) => {
 
     const upsellAgent = agentsConfig.getAgent('upsell');
     const url = agentsConfig.buildUrl('upsell', 'analyzeQuick');
-    
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -619,22 +791,22 @@ app.post('/upsell/analyze/quick', async (req, res) => {
     }
 
     const result = await response.json();
-    
+
     console.log(`[Orchestrator] Upsell Agent quick analysis response received`);
     res.json(result);
 
   } catch (err) {
     console.error('[Orchestrator] Quick upsell analysis error:', err);
-    
+
     if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
+      return res.status(503).json({
         error: 'Upsell Agent에 연결할 수 없습니다.',
         detail: 'Upsell Agent가 실행 중인지 확인해주세요 (포트 8008).',
         service: 'Main Backend'
       });
     }
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       error: err.message || 'Quick upsell analysis failed',
       service: 'Main Backend'
     });
@@ -648,16 +820,16 @@ app.post('/upsell/analyze/quick', async (req, res) => {
 app.post('/upsell/intent-only', async (req, res) => {
   try {
     const { conversation_history, current_plan_name, current_plan_fee } = req.body;
-    
+
     if (!conversation_history || !Array.isArray(conversation_history)) {
       return res.status(400).json({ error: 'conversation_history array is required' });
     }
 
     // Upsell Agent 헬스체크
     const upsellAgentHealth = await checkAgentHealth('upsell');
-    
+
     if (!upsellAgentHealth.ok) {
-      return res.status(503).json({ 
+      return res.status(503).json({
         error: 'Upsell Agent is not available',
         detail: 'Upsell Agent가 실행 중이지 않습니다.',
         service: 'Main Backend'
@@ -668,7 +840,7 @@ app.post('/upsell/intent-only', async (req, res) => {
 
     const upsellAgent = agentsConfig.getAgent('upsell');
     const url = agentsConfig.buildUrl('upsell', 'intentOnly');
-    
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -686,22 +858,22 @@ app.post('/upsell/intent-only', async (req, res) => {
     }
 
     const result = await response.json();
-    
+
     console.log(`[Orchestrator] Upsell Agent intent-only response received`);
     res.json(result);
 
   } catch (err) {
     console.error('[Orchestrator] Intent-only analysis error:', err);
-    
+
     if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
+      return res.status(503).json({
         error: 'Upsell Agent에 연결할 수 없습니다.',
         detail: 'Upsell Agent가 실행 중인지 확인해주세요 (포트 8008).',
         service: 'Main Backend'
       });
     }
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       error: err.message || 'Intent-only analysis failed',
       service: 'Main Backend'
     });
@@ -754,15 +926,15 @@ app.listen(PORT, async () => {
   console.log(`Mode: Orchestrator (API Gateway)`);
   console.log(`Reports Directory: ${REPORTS_DIR}`);
   console.log('\n📡 Checking Agent Status...');
-  
+
   const activeAgents = agentsConfig.getActiveAgents();
-  
+
   for (const agent of activeAgents) {
     const health = await checkAgentHealth(agent.key);
     const statusIcon = health.ok ? '✅' : '❌';
     console.log(`${statusIcon} ${agent.name} (${agent.url}): ${health.status}`);
   }
-  
+
   console.log('\n📋 Available Endpoints:');
   console.log('  - GET  /health                  (System health check)');
   console.log('  - GET  /models                  (Available LLM models)');
