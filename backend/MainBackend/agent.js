@@ -125,23 +125,79 @@ app.get('/pricing', (req, res) => {
 });
 
 /**
- * POST /stt/incoming-call
- * Simulate Incoming Call (STT Module Trigger)
+ * POST /api/stt/call-start
+ * Start Incoming Call (STT Module Trigger)
  */
+app.post('/api/stt/call-start', (req, res) => {
+  const { callId, phoneNumber, timestamp } = req.body;
+  if (!phoneNumber) return res.status(400).json({ error: 'phoneNumber required' });
+
+  // Find Customer
+  const customer = CUSTOMERS.find(c => c['번호'] === phoneNumber);
+
+  ACTIVE_CALL = {
+    callId: callId || `call-${Date.now()}`,
+    status: 'active', // 바로 active로 설정 (STT가 시작되었으므로)
+    customer: customer || { '이름': 'Unknown', '번호': phoneNumber },
+    startTime: timestamp || new Date().toISOString(),
+    messages: [] // 대화 내역 저장소 초기화
+  };
+
+  console.log(`[STT] Call Started: ${phoneNumber} (${ACTIVE_CALL.customer['이름']})`);
+  res.json({ success: true, call: ACTIVE_CALL });
+});
+
+/**
+ * POST /api/stt/line
+ * Receive STT Line
+ */
+app.post('/api/stt/line', (req, res) => {
+  const { callId, speaker, text, keywords } = req.body;
+
+  if (!ACTIVE_CALL) {
+    return res.status(400).json({ error: 'No active call' });
+  }
+
+  // Optional: Check callId match
+  // if (callId && ACTIVE_CALL.callId !== callId) ...
+
+  const newMessage = {
+    role: speaker === 'customer' ? 'user' : 'assistant',
+    content: text,
+    keywords: keywords || [],
+    timestamp: new Date().toISOString()
+  };
+
+  ACTIVE_CALL.messages.push(newMessage);
+
+  console.log(`[STT] Line Received (${speaker}): ${text}`);
+  res.json({ success: true });
+});
+
+// Legacy support for existing test (if any)
 app.post('/stt/incoming-call', (req, res) => {
+  // Redirect to new logic
+  req.body.phoneNumber = req.body.phone_number;
+  // ... adapter logic if needed, or just keep it separate. 
+  // For now, let's keep it simple and redirect or just duplicate the minimal logic for backward compat if needed.
+  // But user asked to "move" simulation logic, so I will replace it.
+  // I will redirect simulation calls to use the new API from frontend.
+  // So I will just keep a minimal stub here or remove it if I am sure.
+  // Let's replace it with a redirect-like behavior or just keep the new one.
+  // Since I am replacing the block, the old one is gone.
   const { phone_number } = req.body;
   if (!phone_number) return res.status(400).json({ error: 'phone_number required' });
 
-  // Find Customer
   const customer = CUSTOMERS.find(c => c['번호'] === phone_number);
 
   ACTIVE_CALL = {
-    status: 'ringing',
+    callId: `sim-${Date.now()}`,
+    status: 'active',
     customer: customer || { '이름': 'Unknown', '번호': phone_number },
-    startTime: new Date().toISOString()
+    startTime: new Date().toISOString(),
+    messages: []
   };
-
-  console.log(`[Call] Incoming call from ${phone_number} (${ACTIVE_CALL.customer['이름']})`);
+  console.log(`[Sim] Call active: ${phone_number}`);
   res.json({ success: true, call: ACTIVE_CALL });
 });
 

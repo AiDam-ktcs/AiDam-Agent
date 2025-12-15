@@ -27,40 +27,41 @@ export default function AgentDashboard() {
   // 고객 정보 (Backend Integration)
   const [customerInfo, setCustomerInfo] = useState(null)
 
-  // Call Status Polling
-  useEffect(() => {
-    const pollCallStatus = async () => {
-      try {
-        const resp = await fetch(`${API_URL}/active-call`)
-        const data = await resp.json()
-        if (data.active && data.call) {
-          setCallStatus('active')
-          setCustomerInfo({
-            name: data.call.customer['이름'] || 'Unknown',
-            phone: data.call.customer['번호'],
-            plan: data.call.customer['요금제'] || 'Unknown',
-            age: data.call.customer['나이'],
-            usage: {
-              prev: data.call.customer['전월 데이터'],
-              curr: data.call.customer['현월 데이터']
-            }
-          })
-          setCurrentPhoneNumber(data.call.customer['번호'])
-          if (view === 'main' && data.call.messages) {
-            setMessages(data.call.messages.map(m => ({
-              role: m.role,
-              content: m.content,
-              keywords: m.keywords
-            })))
+  // Call Status Polling Function
+  const pollCallStatus = async () => {
+    try {
+      const resp = await fetch(`${API_URL}/active-call`)
+      const data = await resp.json()
+      if (data.active && data.call) {
+        setCallStatus('active')
+        setCustomerInfo({
+          name: data.call.customer['이름'] || 'Unknown',
+          phone: data.call.customer['번호'],
+          plan: data.call.customer['요금제'] || 'Unknown',
+          age: data.call.customer['나이'],
+          usage: {
+            prev: data.call.customer['전월 데이터'],
+            curr: data.call.customer['현월 데이터']
           }
-        } else if (callStatus === 'active') { // Call ended externally
-          // Optional: Handle external call end
+        })
+        setCurrentPhoneNumber(data.call.customer['번호'])
+        if (view === 'main' && data.call.messages) {
+          setMessages(data.call.messages.map(m => ({
+            role: m.role,
+            content: m.content,
+            keywords: m.keywords
+          })))
         }
-      } catch (err) {
-        console.error('Failed to poll call status:', err)
+      } else if (callStatus === 'active') { // Call ended externally
+        // Optional: Handle external call end
       }
+    } catch (err) {
+      console.error('Failed to poll call status:', err)
     }
+  }
 
+  // Polling Effect
+  useEffect(() => {
     const interval = setInterval(pollCallStatus, 2000)
     return () => clearInterval(interval)
   }, [callStatus])
@@ -94,9 +95,6 @@ export default function AgentDashboard() {
 
   useEffect(() => {
     loadReports()
-    if (reports.length > 0 && !selectedReportId) {
-      viewReport(reports[0].id)
-    }
   }, [])
 
   // 대화가 업데이트될 때마다 의중 분석 (User 메시지인 경우)
@@ -221,10 +219,20 @@ export default function AgentDashboard() {
     try {
       // 1. Load Sample Data via Frontend fetch (client-side)
       const resp = await fetch(`/sample-conversations/conversation${sampleId}.json`)
-      const sampleMessages = await resp.json()
+      let sampleData = await resp.json()
+
+      // Support both Array (legacy) and Object (new) formats
+      let sampleMessages = []
+      let phone = '010-1234-5678' // Default fallback
+
+      if (Array.isArray(sampleData)) {
+        sampleMessages = sampleData
+      } else {
+        sampleMessages = sampleData.messages
+        if (sampleData.phoneNumber) phone = sampleData.phoneNumber
+      }
 
       // 2. Start Call via API
-      const phone = '010-1234-5678' // Simulation Phone
       const startResp = await fetch(`${API_URL}/api/stt/call-start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -236,13 +244,15 @@ export default function AgentDashboard() {
 
       if (!startResp.ok) throw new Error('Call start failed')
 
+      // Refresh UI immediately to show Customer Info
+      await pollCallStatus()
+
       // 3. Send Lines Sequentially
       for (const msg of sampleMessages) {
-        if (!process.env.TEST_FAST_MODE) {
-          await new Promise(r => setTimeout(r, 1000)) // 1 second delay
-        }
+        // Delay 1 second for simulation effect
+        await new Promise(r => setTimeout(r, 1000))
 
-        await fetch(`${API_URL}/api/stt/line`, {
+        const response = await fetch(`${API_URL}/api/stt/line`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -256,7 +266,7 @@ export default function AgentDashboard() {
 
     } catch (err) {
       console.error('Simulation failed:', err)
-      alert('시뮬레이션 중 오류가 발생했습니다.')
+      alert(`시뮬레이션 중 오류가 발생했습니다: ${err.message}`)
     } finally {
       setIsSimulating(false)
     }
