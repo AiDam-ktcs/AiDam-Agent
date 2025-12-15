@@ -426,12 +426,13 @@ app.post('/process', async (req, res) => {
                 analysis: eventData.data.analysis,
                 content: eventData.data.report,
                 format: 'markdown',
-                messages: messages
+                messages: messages,
+                customer_phone: eventData.data.customer_phone // Save Customer Phone
               };
 
               const reportPath = path.join(REPORTS_DIR, `${eventData.data.reportId}.json`);
               fs.writeFileSync(reportPath, JSON.stringify(reportData, null, 2));
-              console.log(`[Orchestrator] Report saved: ${eventData.data.reportId}`);
+              console.log(`[Orchestrator] Report saved: ${eventData.data.reportId} (Customer: ${eventData.data.customer_phone || 'None'})`);
             }
           }
         } catch (parseError) {
@@ -470,21 +471,29 @@ app.post('/process', async (req, res) => {
 
 /**
  * GET /reports
- * 저장된 보고서 목록 조회
+ * 저장된 보고서 목록 조회 (Optional: ?phone=... for filtering)
  */
 app.get('/reports', (req, res) => {
   try {
+    const { phone } = req.query;
     const files = fs.readdirSync(REPORTS_DIR);
     const reports = files
       .filter(f => f.endsWith('.json'))
       .map(f => {
         try {
           const data = JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, f), 'utf-8'));
+
+          // Filter by phone if provided
+          if (phone && data.customer_phone !== phone) {
+            return null;
+          }
+
           return {
             id: data.id,
             created_at: data.created_at,
             summary: data.analysis?.summary || 'No summary',
-            topics: data.analysis?.main_topics || []
+            topics: data.analysis?.main_topics || [],
+            customer_phone: data.customer_phone
           };
         } catch (err) {
           console.error(`Error reading report ${f}:`, err);

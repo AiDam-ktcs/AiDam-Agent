@@ -15,33 +15,34 @@ function createReportPrompt(analysis, customerInfo) {
   let customerSection = "";
   if (customerInfo) {
     customerSection = `
-고객 정보:
-- 이름: ${customerInfo['이름']}
-- 전화번호: ${customerInfo['번호']}
-- 요금제: ${customerInfo['요금제']}
-- 나이: ${customerInfo['나이']}
-- 데이터 사용량: 전월 ${customerInfo['전월 데이터']}, 현월 ${customerInfo['현월 데이터']}
+# 고객 정보
+- **이름**: ${customerInfo['이름']}
+- **전화번호**: ${customerInfo['번호']}
+- **요금제**: ${customerInfo['요금제']}
+- **나이**: ${customerInfo['나이']}
+- **데이터 사용량**: 전월 ${customerInfo['전월 데이터']}, 현월 ${customerInfo['현월 데이터']}
 `;
   }
 
   return `대화 분석 데이터를 기반으로 전문적이고 포괄적인 보고서를 작성하세요.
 
-${customerSection ? customerSection : "고객 정보: 정보 없음"}
+${customerSection ? "먼저 아래 고객 정보를 보고서 최상단에 별도 섹션으로 그대로 포함시키세요.\n" + customerSection : ""}
 
 분석 데이터:
 ${JSON.stringify(analysis, null, 2)}
 
 다음 섹션으로 구성된 상세한 보고서를 한글 Markdown 형식으로 작성하세요:
-1. 요약 (반드시 고객 이름, 현재 요금제, 데이터 사용 현황을 포함하여 요약할 것)
-2. 대화 개요
-3. 주요 주제 및 테마
-4. 상세 분석
-5. 참여자 행동 분석
-6. 인사이트 및 관찰 사항
-7. 통계
-8. 권장 사항 (현재 요금제와 사용량을 고려하여 제안)
+1. ${customerInfo ? '고객 정보 (위의 내용을 포함)' : '고객 정보 (정보 없음)'}
+2. 요약
+3. 대화 개요
+4. 주요 주제 및 테마
+5. 상세 분석
+6. 참여자 행동 분석
+7. 인사이트 및 관찰 사항
+8. 통계
+9. 권장 사항 (현재 요금제와 사용량을 고려하여 제안)
 
-보고서는 명확하고 전문적이며 실용적이어야 합니다. 제목, 목록, 표, 강조 등 적절한 Markdown 형식을 사용하세요.`;
+보고서는 명확하고 전문적이며 실용적이어야 합니다. 제목. 목록, 표, 강조 등 적절한 Markdown 형식을 사용하세요.`;
 }
 
 /**

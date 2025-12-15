@@ -164,9 +164,10 @@ export default function AgentDashboard() {
     }
   }
 
-  const loadReports = async () => {
+  const loadReports = async (phone = null) => {
     try {
-      const resp = await fetch(`${API_URL}/reports`)
+      const url = phone ? `${API_URL}/reports?phone=${phone}` : `${API_URL}/reports`
+      const resp = await fetch(url)
       const data = await resp.json()
       setReports(data.reports || [])
     } catch (err) {
@@ -536,10 +537,17 @@ export default function AgentDashboard() {
         <div className="header-right">
           <button
             className={`header-btn ${view === 'history' ? 'active' : ''}`}
-            onClick={() => setView(view === 'history' ? 'main' : 'history')}
+            onClick={() => {
+              if (view === 'history') {
+                setView('main')
+              } else {
+                loadReports(null) // Load all (or handle accordingly)
+                setView('history')
+              }
+            }}
           >
             <span className="material-icons-outlined">history</span>
-            히스토리 ({reports.length})
+            히스토리 (전체)
           </button>
         </div>
       </header>
@@ -553,7 +561,17 @@ export default function AgentDashboard() {
               <div className="info-card customer-info-card">
                 <div className="card-header">
                   <h2>고객 정보</h2>
-                  <button className="history-link">
+                  <button
+                    className="history-link"
+                    onClick={() => {
+                      if (customerInfo && customerInfo.phone) {
+                        loadReports(customerInfo.phone)
+                        setView('history')
+                      } else {
+                        alert('고객 정보가 없습니다.')
+                      }
+                    }}
+                  >
                     <span className="material-icons-outlined">history</span>
                     <span>상담 이력</span>
                   </button>

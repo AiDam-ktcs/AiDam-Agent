@@ -207,7 +207,8 @@ app.post('/process', async (req, res) => {
         word_count: reportData.word_count,
         char_count: reportData.char_count,
         sections: reportData.sections
-      }
+      },
+      customer_phone: customerInfo ? customerInfo['번호'] : null
     });
 
     res.end();
