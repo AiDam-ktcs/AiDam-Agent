@@ -238,7 +238,16 @@ export default function AgentDashboard() {
           messages: messages,
           metadata: {
             source: 'auto_analysis',
-            uploaded_at: new Date().toISOString()
+            uploaded_at: new Date().toISOString(),
+            // Capture UI Snapshot for Report Detail View
+            ui_snapshot: {
+              recommendedPlans: recommendedPlans,
+              aiReasoning: aiReasoning,
+              planScript: planScript,
+              customerIntent: customerIntent,
+              // Only capture selection state
+              selectedPlanId: recommendedPlans.find(p => p.selected)?.id || null
+            }
           }
         })
       })
@@ -306,12 +315,23 @@ export default function AgentDashboard() {
           reportId: data.report.id,
           analysis: data.report.analysis,
           report: data.report.content,
-          created_at: data.report.created_at
+          created_at: data.report.created_at,
+          // Load Snapshot
+          ui_snapshot: data.report.ui_snapshot,
+          customer_phone: data.report.customer_phone
         })
         setMessages(data.report.messages || [])
         setSelectedReportId(reportId)
-        setView('main')
-        setRightPanelTab('report')
+
+        // Decide View based on context
+        // If clicking from History list, go to 'report_detail'
+        // If just generated, stay in 'main' (or move to detail if preferred? Stick to main for now)
+        if (view === 'history') {
+          setView('report_detail')
+        } else {
+          setView('main')
+          setRightPanelTab('report')
+        }
       }
     } catch (err) {
       console.error('Failed to load report:', err)
@@ -920,6 +940,135 @@ export default function AgentDashboard() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {view === 'report_detail' && currentReport && (
+          <div className="report-detail-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#f5f7fa', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000 }}>
+            {/* Detail Header */}
+            <header className="detail-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 25px', background: '#fff', borderBottom: '1px solid #e0e0e0', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+              <div className="header-info" style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                <button
+                  onClick={() => setView('history')}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', color: '#666', fontSize: '15px' }}
+                >
+                  <span className="material-icons-outlined" style={{ marginRight: '5px' }}>arrow_back</span>
+                  목록으로
+                </button>
+                <div style={{ width: '1px', height: '20px', background: '#e0e0e0' }}></div>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: '18px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span>{currentReport.customer_phone ? `고객: ${currentReport.customer_phone}` : '고객 정보 없음'}</span>
+                    <span style={{ fontSize: '14px', color: '#888', fontWeight: 'normal' }}>| {new Date(currentReport.created_at).toLocaleString()}</span>
+                  </h2>
+                  <span style={{ fontSize: '12px', color: '#aaa' }}>ID: {currentReport.reportId}</span>
+                </div>
+              </div>
+
+              <button
+                onClick={() => {
+                  setView('main')
+                  setMessages([])
+                  setCurrentReport(null)
+                }}
+                style={{ padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '500' }}
+              >
+                상담으로 돌아가기
+              </button>
+            </header>
+
+            {/* 3-Column Layout */}
+            <div className="detail-content" style={{ display: 'flex', flex: 1, overflow: 'hidden', gap: '2px' }}>
+
+              {/* 1. Chat Log (Left) */}
+              <section className="detail-col text-col" style={{ flex: 1, background: '#fff', borderRight: '1px solid #e0e0e0', display: 'flex', flexDirection: 'column', minWidth: '350px' }}>
+                <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
+                  <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>chat</span>
+                  상담 대화 내용
+                </div>
+                <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+                  {messages.map((msg, idx) => (
+                    <div key={idx} className={`chat-bubble ${msg.role}`} style={{ opacity: 0.9 }}>
+                      <div className="bubble-content">
+                        <span className="bubble-author">
+                          {msg.role === 'user' ? '고객' : '상담사'}
+                        </span>
+                        <div className="bubble-text">{msg.content}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {/* 2. RAG/Upsell Context (Center) */}
+              <section className="detail-col context-col" style={{ flex: 1, background: '#f8fafc', borderRight: '1px solid #e0e0e0', display: 'flex', flexDirection: 'column', minWidth: '350px' }}>
+                <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
+                  <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>psychology</span>
+                  상담 당시 AI 제안 (RAG & Upsell)
+                </div>
+                <div className="context-content" style={{ padding: '20px', overflowY: 'auto', flex: 1 }}>
+
+                  {/* Recovered Intent */}
+                  <div className="info-card intent-card" style={{ marginBottom: '20px' }}>
+                    <h3>당시 고객 의중 파악</h3>
+                    <p style={{ marginTop: '10px', color: '#333' }}>
+                      {currentReport.ui_snapshot?.customerIntent || '기록된 의중 데이터 없음'}
+                    </p>
+                  </div>
+
+                  {/* Recovered Plans */}
+                  <div className="info-card plans-card">
+                    <h3>제안된 요금제</h3>
+                    <div className="plans-list" style={{ marginTop: '15px' }}>
+                      {(currentReport.ui_snapshot?.recommendedPlans || []).length === 0 ? (
+                        <p style={{ color: '#999', fontStyle: 'italic' }}>제안된 요금제 없음</p>
+                      ) : (
+                        (currentReport.ui_snapshot?.recommendedPlans || []).map((plan, idx) => (
+                          <div
+                            key={idx}
+                            className={`plan-item ${plan.id === currentReport.ui_snapshot?.selectedPlanId ? 'selected' : ''}`}
+                            style={{
+                              border: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '2px solid #3b82f6' : '1px solid #e2e8f0',
+                              background: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#eff6ff' : '#fff'
+                            }}
+                          >
+                            <h4 style={{ color: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#1d4ed8' : '#333' }}>{plan.name}</h4>
+                            <p className="plan-detail">월 {plan.price}원, {plan.data}</p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Recovered Script */}
+                  {currentReport.ui_snapshot?.planScript && (
+                    <div className="plan-script-box" style={{ marginTop: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                      <h4 style={{ marginBottom: '10px', fontSize: '14px', color: '#555' }}>
+                        <span className="material-icons-outlined" style={{ fontSize: '16px', verticalAlign: 'middle' }}>description</span>
+                        생성된 추천 스크립트
+                      </h4>
+                      <p style={{ lineHeight: '1.5', color: '#333' }}>{currentReport.ui_snapshot.planScript}</p>
+                    </div>
+                  )}
+
+                </div>
+              </section>
+
+              {/* 3. Report (Right) */}
+              <section className="detail-col report-col" style={{ flex: 1.2, background: '#fff', display: 'flex', flexDirection: 'column', minWidth: '400px' }}>
+                <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
+                  <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>summarize</span>
+                  최종 상담 보고서
+                </div>
+                <div className="markdown-content" style={{ padding: '30px', overflowY: 'auto', flex: 1 }}>
+                  {/* Re-use ReactMarkdown */}
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {currentReport.report}
+                  </ReactMarkdown>
+                </div>
+              </section>
+
+            </div>
           </div>
         )}
 

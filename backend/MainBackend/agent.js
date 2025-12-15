@@ -427,7 +427,8 @@ app.post('/process', async (req, res) => {
                 content: eventData.data.report,
                 format: 'markdown',
                 messages: messages,
-                customer_phone: eventData.data.customer_phone // Save Customer Phone
+                customer_phone: eventData.data.customer_phone,
+                ui_snapshot: metadata?.ui_snapshot || null // Save UI Snapshot
               };
 
               const reportPath = path.join(REPORTS_DIR, `${eventData.data.reportId}.json`);
