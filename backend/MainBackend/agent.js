@@ -18,9 +18,26 @@ app.use((req, res, next) => {
 
 // --- Data Management ---
 const DATA_DIR = path.join(__dirname, 'docs');
+const CONSULTATIONS_DIR = path.join(DATA_DIR, 'consultations');
+if (!fs.existsSync(CONSULTATIONS_DIR)) {
+  fs.mkdirSync(CONSULTATIONS_DIR, { recursive: true });
+}
+
 let CUSTOMERS = [];
 let PRICING_PLANS = {};
 let ACTIVE_CALL = null; // { customer: {}, startTime: ... }
+
+// Save Consultation Helper
+function saveConsultation(call) {
+  if (!call || !call.callId) return;
+  try {
+    const filePath = path.join(CONSULTATIONS_DIR, `${call.callId}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(call, null, 2));
+    console.log(`[System] Saved consultation: ${call.callId}`);
+  } catch (err) {
+    console.error(`[System] Failed to save consultation ${call.callId}:`, err);
+  }
+}
 
 // Load Customer Data (CSV)
 function loadCustomers() {
@@ -143,6 +160,8 @@ app.post('/api/stt/call-start', (req, res) => {
     messages: [] // 대화 내역 저장소 초기화
   };
 
+  saveConsultation(ACTIVE_CALL);
+
   console.log(`[STT] Call Started: ${phoneNumber} (${ACTIVE_CALL.customer['이름']})`);
   res.json({ success: true, call: ACTIVE_CALL });
 });
@@ -169,6 +188,7 @@ app.post('/api/stt/line', (req, res) => {
   };
 
   ACTIVE_CALL.messages.push(newMessage);
+  saveConsultation(ACTIVE_CALL); // 매 줄마다 저장 (실시간성 보장 위해)
 
   console.log(`[STT] Line Received (${speaker}): ${text}`);
   res.json({ success: true });
@@ -197,6 +217,9 @@ app.post('/stt/incoming-call', (req, res) => {
     startTime: new Date().toISOString(),
     messages: []
   };
+
+  saveConsultation(ACTIVE_CALL);
+
   console.log(`[Sim] Call active: ${phone_number}`);
   res.json({ success: true, call: ACTIVE_CALL });
 });
@@ -212,10 +235,14 @@ app.post('/call/outbound', (req, res) => {
   const customer = CUSTOMERS.find(c => c['번호'] === phone_number);
 
   ACTIVE_CALL = {
+    callId: `out-${Date.now()}`,
     status: 'dialing',
     customer: customer || { '이름': 'Unknown', '번호': phone_number },
-    startTime: new Date().toISOString()
+    startTime: new Date().toISOString(),
+    messages: []
   };
+
+  saveConsultation(ACTIVE_CALL);
 
   console.log(`[Call] Dialing to ${phone_number}...`);
   res.json({ success: true, call: ACTIVE_CALL });
@@ -233,12 +260,87 @@ app.get('/active-call', (req, res) => {
 });
 
 /**
+ * Background Task: Trigger Report Generation
+ */
+async function triggerReportGeneration(callData) {
+  if (!callData || !callData.messages || callData.messages.length === 0) {
+    console.log('[System] Skipping report generation: No messages.');
+    return;
+  }
+
+  console.log(`[System] Triggering background report generation for call ${callData.callId}...`);
+
+  try {
+    // 1. Analyze
+    console.log(`[System] Requesting analysis for ${callData.callId}...`);
+    const analysisResp = await callReportAgent('analyze', {
+      messages: callData.messages,
+      metadata: {
+        callId: callData.callId,
+        customer: callData.customer,
+        startTime: callData.startTime,
+        endTime: callData.endTime
+      }
+    });
+    const analysisResult = await analysisResp.json();
+
+    if (!analysisResult.success || !analysisResult.analysis) {
+      throw new Error('Analysis failed or returned empty result');
+    }
+
+    // 2. Generate Report
+    console.log(`[System] Requesting report generation for ${callData.callId}...`);
+    const generateResp = await callReportAgent('generate', {
+      analysis: analysisResult.analysis,
+      format: 'markdown'
+    });
+    const generateResult = await generateResp.json();
+
+    if (!generateResult.success || !generateResult.report) {
+      throw new Error('Report generation failed');
+    }
+
+    // 3. Save Report
+    const report = generateResult.report;
+    const reportData = {
+      id: report.id,
+      callId: callData.callId,
+      created_at: report.created_at,
+      customer_phone: callData.customer['번호'],
+      analysis: analysisResult.analysis,
+      content: report.content,
+      format: 'markdown'
+    };
+
+    const reportPath = path.join(REPORTS_DIR, `${report.id}.json`);
+    fs.writeFileSync(reportPath, JSON.stringify(reportData, null, 2));
+    console.log(`[System] Report generated and saved: ${report.id} (Call: ${callData.callId})`);
+
+    // 4. Update Consultation Record with Report ID
+    callData.reportId = report.id;
+    saveConsultation(callData);
+
+  } catch (err) {
+    console.error(`[System] Report generation failed for call ${callData.callId}:`, err);
+  }
+}
+
+/**
  * POST /item/call/end
  * End current call
  */
 app.post('/call/end', (req, res) => {
   if (ACTIVE_CALL) {
     console.log(`[Call] Ended call with ${ACTIVE_CALL.customer['번호']}`);
+    ACTIVE_CALL.status = 'completed';
+    ACTIVE_CALL.endTime = new Date().toISOString();
+
+    // Save final state
+    saveConsultation(ACTIVE_CALL);
+
+    // Trigger Report Generation (Background) - REMOVED per user request
+    // triggerReportGeneration(ACTIVE_CALL);
+
     ACTIVE_CALL = null;
   }
   res.json({ success: true });

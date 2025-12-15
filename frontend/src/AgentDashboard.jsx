@@ -53,7 +53,9 @@ export default function AgentDashboard() {
           })))
         }
       } else if (callStatus === 'active') { // Call ended externally
-        // Optional: Handle external call end
+        setCallStatus('ended')
+        // Auto-navigate to Report Tab
+        setRightPanelTab('report')
       }
     } catch (err) {
       console.error('Failed to poll call status:', err)
@@ -64,6 +66,13 @@ export default function AgentDashboard() {
   useEffect(() => {
     const interval = setInterval(pollCallStatus, 2000)
     return () => clearInterval(interval)
+  }, [callStatus])
+
+  // Auto-navigate Effect when manually ending call
+  useEffect(() => {
+    if (callStatus === 'ended') {
+      setRightPanelTab('report')
+    }
   }, [callStatus])
 
   // 추천 요금제 (AI가 분석해서 제공)
@@ -206,6 +215,15 @@ export default function AgentDashboard() {
     }
 
     return msgs
+  }
+
+  const handleEndCall = async () => {
+    try {
+      await fetch(`${API_URL}/call/end`, { method: 'POST' })
+      setCallStatus('ended')
+    } catch (err) {
+      console.error('Failed to end call:', err)
+    }
   }
 
   /* Simulation Logic */
@@ -466,18 +484,6 @@ export default function AgentDashboard() {
     link.click()
   }
 
-  const handleEndCall = async () => {
-    try {
-      await fetch(`${API_URL}/call/end`, { method: 'POST' })
-      setCallStatus('ended')
-      setCustomerInfo(null)
-      setMessages([])
-      setCurrentReport(null)
-    } catch (err) {
-      console.error('Failed to end call:', err)
-    }
-  }
-
   // Incoming Call Simulation (Dev Tool) - Now opens menu
   const toggleSimulationMenu = () => {
     setSimulationMenuOpen(!simulationMenuOpen)
@@ -551,6 +557,7 @@ export default function AgentDashboard() {
         <div className="header-left">
           <h1 className="app-title">AiDam</h1>
           <div className="header-divider"></div>
+
           <button
             className="end-call-btn"
             onClick={handleEndCall}
@@ -559,18 +566,35 @@ export default function AgentDashboard() {
             <span className="material-icons-outlined">call_end</span>
             <span>End Call</span>
           </button>
+
           {/* Dev Tool: Simulate Call */}
           <div style={{ position: 'relative', display: 'inline-block' }}>
+            {/* ... keeping simulation button ... */}
             <button
               className="sim-call-btn"
               onClick={toggleSimulationMenu}
-              style={{ marginLeft: '10px', padding: '5px 10px', background: isSimulating ? '#eab308' : '#444', border: 'none', color: '#fff', borderRadius: '4px', cursor: 'pointer' }}
+              style={{
+                marginLeft: '10px',
+                padding: '0.5rem 1rem',
+                background: isSimulating ? '#eab308' : '#444',
+                border: 'none',
+                color: '#fff',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.5rem',
+                fontSize: '0.875rem',
+                fontWeight: '500'
+              }}
             >
               <span className="material-icons-outlined" style={{ fontSize: '16px', verticalAlign: 'middle', marginRight: '4px' }}>
                 {isSimulating ? 'autorenew' : 'smart_toy'}
               </span>
               {isSimulating ? 'Simulating...' : 'Simulate Call'}
             </button>
+            {/* ... keeping simulation menu ... */}
             {simulationMenuOpen && (
               <div style={{
                 position: 'absolute',
@@ -634,6 +658,7 @@ export default function AgentDashboard() {
         </div>
 
         <div className="header-center">
+          {/* ... keeping center components ... */}
           <div className="recording-status">
             <span className="recording-dot"></span>
             <span className="recording-text">Recording...</span>
@@ -690,7 +715,7 @@ export default function AgentDashboard() {
             히스토리 (전체)
           </button>
         </div>
-      </header>
+      </header >
 
       <main className="agent-main">
         {view === 'main' && (
@@ -785,7 +810,7 @@ export default function AgentDashboard() {
                         </div>
                         <div className="bubble-content">
                           <span className="bubble-author">
-                            {msg.role === 'user' ? '고객' : '상담사 (AI)'}
+                            {msg.role === 'user' ? '고객' : '상담사'}
                           </span>
                           <div
                             className="bubble-text"
@@ -819,7 +844,7 @@ export default function AgentDashboard() {
                   고객 분석
                 </button>
                 <button
-                  className={`tab-btn ${rightPanelTab === 'report' ? 'active' : ''}`}
+                  className={`tab-btn ${rightPanelTab === 'report' ? 'active' : ''} ${callStatus === 'ended' ? 'shimmer-highlight' : ''}`}
                   onClick={() => setRightPanelTab('report')}
                 >
                   상담 보고서
@@ -979,7 +1004,7 @@ export default function AgentDashboard() {
                         "보고서 생성" 버튼을 클릭하세요.
                       </p>
                       {messages.length > 0 && (
-                        <button onClick={handleProcess} className="generate-report-btn">
+                        <button onClick={handleProcess} className={`generate-report-btn ${callStatus === 'ended' ? 'shimmer-highlight' : ''}`}>
                           <span className="material-icons-outlined">summarize</span>
                           보고서 생성
                         </button>
