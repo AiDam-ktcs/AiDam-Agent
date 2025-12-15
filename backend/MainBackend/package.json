@@ -8,8 +8,8 @@
     "dev": "nodemon agent.js",
     "test": "node test-agent.js",
     "agent": "node agent.js",
-    "report-agent": "cd agents/report-agent && npm start",
-    "install-all": "npm install && cd agents/report-agent && npm install"
+    "report-agent": "cd ../Report-agent && npm start",
+    "install-all": "npm install && cd ../Report-agent && npm install"
   },
   "keywords": [
     "aidam",
