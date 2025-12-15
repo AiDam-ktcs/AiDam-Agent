@@ -46,6 +46,13 @@ export default function AgentDashboard() {
             }
           })
           setCurrentPhoneNumber(data.call.customer['번호'])
+          if (view === 'main' && data.call.messages) {
+            setMessages(data.call.messages.map(m => ({
+              role: m.role,
+              content: m.content,
+              keywords: m.keywords
+            })))
+          }
         } else if (callStatus === 'active') { // Call ended externally
           // Optional: Handle external call end
         }
@@ -203,18 +210,59 @@ export default function AgentDashboard() {
     return msgs
   }
 
-  const loadSampleConversation = async (sampleId) => {
+  /* Simulation Logic */
+  const [isSimulating, setIsSimulating] = useState(false)
+  const [simulationMenuOpen, setSimulationMenuOpen] = useState(false)
+
+  const simulateConversation = async (sampleId) => {
+    setSimulationMenuOpen(false)
+    setIsSimulating(true)
+
     try {
+      // 1. Load Sample Data via Frontend fetch (client-side)
       const resp = await fetch(`/sample-conversations/conversation${sampleId}.json`)
-      const data = await resp.json()
-      setMessages(data)
-      setCurrentReport(null)
-      setView('main')
+      const sampleMessages = await resp.json()
+
+      // 2. Start Call via API
+      const phone = '010-1234-5678' // Simulation Phone
+      const startResp = await fetch(`${API_URL}/api/stt/call-start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          callId: `sim-${Date.now()}`,
+          phoneNumber: phone
+        })
+      })
+
+      if (!startResp.ok) throw new Error('Call start failed')
+
+      // 3. Send Lines Sequentially
+      for (const msg of sampleMessages) {
+        if (!process.env.TEST_FAST_MODE) {
+          await new Promise(r => setTimeout(r, 1000)) // 1 second delay
+        }
+
+        await fetch(`${API_URL}/api/stt/line`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callId: 'current', // Backend handles current active call
+            speaker: msg.role === 'user' ? 'customer' : 'agent',
+            text: msg.content,
+            keywords: [] // Sample JSON might not have keywords, or we extract them here
+          })
+        })
+      }
+
     } catch (err) {
-      console.error('Failed to load sample:', err)
-      alert('샘플 대화를 불러오는데 실패했습니다.')
+      console.error('Simulation failed:', err)
+      alert('시뮬레이션 중 오류가 발생했습니다.')
+    } finally {
+      setIsSimulating(false)
     }
   }
+
+  // const loadSampleConversation = ... (Removed in favor of simulateConversation)
 
   const showSampleList = () => {
     setView('samples')
@@ -420,26 +468,9 @@ export default function AgentDashboard() {
     }
   }
 
-  // Incoming Call Simulation (Dev Tool)
-  const simulateIncomingCall = async () => {
-    const phoneNumber = prompt('전화번호를 입력하세요 (예: 010-9093-7189):', '010-9093-7189')
-    if (!phoneNumber) return
-
-    try {
-      const resp = await fetch(`${API_URL}/stt/incoming-call`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone_number: phoneNumber })
-      })
-      const data = await resp.json()
-      if (data.success) {
-        setCallStatus('ringing')
-        // Automatically answer for demo purposes after 1.5s
-        setTimeout(() => setCallStatus('active'), 1500)
-      }
-    } catch (err) {
-      alert('오류 발생: ' + err.message)
-    }
+  // Incoming Call Simulation (Dev Tool) - Now opens menu
+  const toggleSimulationMenu = () => {
+    setSimulationMenuOpen(!simulationMenuOpen)
   }
 
   // 요금제 선택 핸들러
@@ -519,14 +550,77 @@ export default function AgentDashboard() {
             <span>End Call</span>
           </button>
           {/* Dev Tool: Simulate Call */}
-          <button
-            className="sim-call-btn"
-            onClick={simulateIncomingCall}
-            style={{ marginLeft: '10px', padding: '5px 10px', background: '#444', border: 'none', color: '#fff', borderRadius: '4px', cursor: 'pointer' }}
-          >
-            <span className="material-icons-outlined" style={{ fontSize: '16px', verticalAlign: 'middle', marginRight: '4px' }}>ring_volume</span>
-            Simulate Call
-          </button>
+          <div style={{ position: 'relative', display: 'inline-block' }}>
+            <button
+              className="sim-call-btn"
+              onClick={toggleSimulationMenu}
+              style={{ marginLeft: '10px', padding: '5px 10px', background: isSimulating ? '#eab308' : '#444', border: 'none', color: '#fff', borderRadius: '4px', cursor: 'pointer' }}
+            >
+              <span className="material-icons-outlined" style={{ fontSize: '16px', verticalAlign: 'middle', marginRight: '4px' }}>
+                {isSimulating ? 'autorenew' : 'smart_toy'}
+              </span>
+              {isSimulating ? 'Simulating...' : 'Simulate Call'}
+            </button>
+            {simulationMenuOpen && (
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                left: '10px',
+                marginTop: '5px',
+                background: 'white',
+                border: '1px solid #ddd',
+                borderRadius: '8px',
+                boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
+                zIndex: 1000,
+                width: '240px',
+                maxHeight: '400px',
+                overflowY: 'auto'
+              }}>
+                <div style={{ padding: '10px', borderBottom: '1px solid #eee', fontWeight: 'bold', fontSize: '14px' }}>
+                  샘플 대화 선택
+                </div>
+                {sampleList.map(sample => (
+                  <button
+                    key={sample.id}
+                    onClick={() => simulateConversation(sample.id)}
+                    style={{
+                      display: 'flex',
+                      width: '100%',
+                      padding: '10px',
+                      border: 'none',
+                      background: 'transparent',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      borderBottom: '1px solid #f5f5f5'
+                    }}
+                    onMouseEnter={e => e.target.style.background = '#f9fafb'}
+                    onMouseLeave={e => e.target.style.background = 'transparent'}
+                  >
+                    {sample.id + 1}. {sample.title}
+                  </button>
+                ))}
+                <div style={{ padding: '5px', borderTop: '1px solid #eee' }}>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '10px',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      color: '#555'
+                    }}
+                    onMouseEnter={e => e.target.style.background = '#f9fafb'}
+                    onMouseLeave={e => e.target.style.background = 'transparent'}
+                  >
+                    <span className="material-icons-outlined" style={{ fontSize: '16px', marginRight: '8px' }}>folder_open</span>
+                    파일에서 불러오기
+                    <input type="file" accept=".txt,.json" onChange={handleFileUpload} hidden />
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="header-center">
@@ -663,17 +757,11 @@ export default function AgentDashboard() {
                 {messages.length === 0 ? (
                   <div className="empty-conversation">
                     <span className="material-icons-outlined empty-icon">chat_bubble_outline</span>
-                    <p>상담 대화가 표시됩니다</p>
+                    <p>아직 통화 내용이 없습니다</p>
                     <div className="empty-actions">
-                      <button onClick={showSampleList} className="action-btn primary">
-                        <span className="material-icons-outlined">description</span>
-                        샘플 대화 불러오기
-                      </button>
-                      <label className="action-btn secondary">
-                        <span className="material-icons-outlined">folder_open</span>
-                        파일에서 불러오기
-                        <input type="file" accept=".txt,.json" onChange={handleFileUpload} hidden />
-                      </label>
+                      <div className="simulation-hint" style={{ color: '#aaa', fontSize: '0.9em' }}>
+                        상단 "Simulate Call" 버튼을 눌러 시뮬레이션을 시작하세요.
+                      </div>
                     </div>
                   </div>
                 ) : (
@@ -934,217 +1022,224 @@ export default function AgentDashboard() {
               )}
             </aside>
           </div>
-        )}
+        )
+        }
 
-        {view === 'history' && (
-          <div className="history-view">
-            <div className="history-header">
-              <h2>📚 보고서 히스토리</h2>
-              <button onClick={() => setView('main')} className="back-btn">
-                <span className="material-icons-outlined">arrow_back</span>
-                돌아가기
-              </button>
-            </div>
-
-            {reports.length === 0 ? (
-              <div className="empty-state">
-                <span className="material-icons-outlined empty-icon">folder_open</span>
-                <p>저장된 보고서가 없습니다</p>
-              </div>
-            ) : (
-              <div className="report-list">
-                {reports.map(report => (
-                  <div key={report.id} className="report-item">
-                    <div className="report-header-row">
-                      <div className="report-info">
-                        <h3>{report.id}</h3>
-                        <span className="report-date">{new Date(report.timestamp).toLocaleString('ko-KR')}</span>
-                      </div>
-                      <div className="report-actions">
-                        <button
-                          onClick={() => viewReport(report.id)}
-                          className="view-btn"
-                        >
-                          보기
-                        </button>
-                        <button
-                          onClick={(e) => deleteReport(report.id, e)}
-                          className="delete-btn"
-                        >
-                          삭제
-                        </button>
-                      </div>
-                    </div>
-                    {report.analysis && (
-                      <div className="report-preview">
-                        <span className="preview-label">주요 토픽:</span>
-                        <span className="preview-text">{report.analysis.main_topics?.join(', ')}</span>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {view === 'report_detail' && currentReport && (
-          <div className="report-detail-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#f5f7fa', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000 }}>
-            {/* Detail Header */}
-            <header className="detail-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 25px', background: '#fff', borderBottom: '1px solid #e0e0e0', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-              <div className="header-info" style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-                <button
-                  onClick={() => setView('history')}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', color: '#666', fontSize: '15px' }}
-                >
-                  <span className="material-icons-outlined" style={{ marginRight: '5px' }}>arrow_back</span>
-                  목록으로
+        {
+          view === 'history' && (
+            <div className="history-view">
+              <div className="history-header">
+                <h2>📚 보고서 히스토리</h2>
+                <button onClick={() => setView('main')} className="back-btn">
+                  <span className="material-icons-outlined">arrow_back</span>
+                  돌아가기
                 </button>
-                <div style={{ width: '1px', height: '20px', background: '#e0e0e0' }}></div>
-                <div>
-                  <h2 style={{ margin: 0, fontSize: '18px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <span>{currentReport.customer_phone ? `고객: ${currentReport.customer_phone}` : '고객 정보 없음'}</span>
-                    <span style={{ fontSize: '14px', color: '#888', fontWeight: 'normal' }}>| {new Date(currentReport.created_at).toLocaleString()}</span>
-                  </h2>
-                  <span style={{ fontSize: '12px', color: '#aaa' }}>ID: {currentReport.reportId}</span>
-                </div>
               </div>
 
-              <button
-                onClick={() => {
-                  setView('main')
-                  setMessages([])
-                  setCurrentReport(null)
-                }}
-                style={{ padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '500' }}
-              >
-                상담으로 돌아가기
-              </button>
-            </header>
-
-            {/* 3-Column Layout */}
-            <div className="detail-content" style={{ display: 'flex', flex: 1, overflow: 'hidden', gap: '2px' }}>
-
-              {/* 1. Chat Log (Left) */}
-              <section className="detail-col text-col" style={{ flex: 1, background: '#fff', borderRight: '1px solid #e0e0e0', display: 'flex', flexDirection: 'column', minWidth: '350px' }}>
-                <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
-                  <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>chat</span>
-                  상담 대화 내용
+              {reports.length === 0 ? (
+                <div className="empty-state">
+                  <span className="material-icons-outlined empty-icon">folder_open</span>
+                  <p>저장된 보고서가 없습니다</p>
                 </div>
-                <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
-                  {messages.map((msg, idx) => (
-                    <div key={idx} className={`chat-bubble ${msg.role}`} style={{ opacity: 0.9 }}>
-                      <div className="bubble-content">
-                        <span className="bubble-author">
-                          {msg.role === 'user' ? '고객' : '상담사'}
-                        </span>
-                        <div className="bubble-text">{msg.content}</div>
+              ) : (
+                <div className="report-list">
+                  {reports.map(report => (
+                    <div key={report.id} className="report-item">
+                      <div className="report-header-row">
+                        <div className="report-info">
+                          <h3>{report.id}</h3>
+                          <span className="report-date">{new Date(report.timestamp).toLocaleString('ko-KR')}</span>
+                        </div>
+                        <div className="report-actions">
+                          <button
+                            onClick={() => viewReport(report.id)}
+                            className="view-btn"
+                          >
+                            보기
+                          </button>
+                          <button
+                            onClick={(e) => deleteReport(report.id, e)}
+                            className="delete-btn"
+                          >
+                            삭제
+                          </button>
+                        </div>
                       </div>
+                      {report.analysis && (
+                        <div className="report-preview">
+                          <span className="preview-label">주요 토픽:</span>
+                          <span className="preview-text">{report.analysis.main_topics?.join(', ')}</span>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
-              </section>
-
-              {/* 2. RAG/Upsell Context (Center) */}
-              <section className="detail-col context-col" style={{ flex: 1, background: '#f8fafc', borderRight: '1px solid #e0e0e0', display: 'flex', flexDirection: 'column', minWidth: '350px' }}>
-                <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
-                  <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>psychology</span>
-                  상담 당시 AI 제안 (RAG & Upsell)
-                </div>
-                <div className="context-content" style={{ padding: '20px', overflowY: 'auto', flex: 1 }}>
-
-                  {/* Recovered Intent */}
-                  <div className="info-card intent-card" style={{ marginBottom: '20px' }}>
-                    <h3>당시 고객 의중 파악</h3>
-                    <p style={{ marginTop: '10px', color: '#333' }}>
-                      {currentReport.ui_snapshot?.customerIntent || '기록된 의중 데이터 없음'}
-                    </p>
-                  </div>
-
-                  {/* Recovered Plans */}
-                  <div className="info-card plans-card">
-                    <h3>제안된 요금제</h3>
-                    <div className="plans-list" style={{ marginTop: '15px' }}>
-                      {(currentReport.ui_snapshot?.recommendedPlans || []).length === 0 ? (
-                        <p style={{ color: '#999', fontStyle: 'italic' }}>제안된 요금제 없음</p>
-                      ) : (
-                        (currentReport.ui_snapshot?.recommendedPlans || []).map((plan, idx) => (
-                          <div
-                            key={idx}
-                            className={`plan-item ${plan.id === currentReport.ui_snapshot?.selectedPlanId ? 'selected' : ''}`}
-                            style={{
-                              border: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '2px solid #3b82f6' : '1px solid #e2e8f0',
-                              background: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#eff6ff' : '#fff'
-                            }}
-                          >
-                            <h4 style={{ color: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#1d4ed8' : '#333' }}>{plan.name}</h4>
-                            <p className="plan-detail">월 {plan.price}원, {plan.data}</p>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Recovered Script */}
-                  {currentReport.ui_snapshot?.planScript && (
-                    <div className="plan-script-box" style={{ marginTop: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                      <h4 style={{ marginBottom: '10px', fontSize: '14px', color: '#555' }}>
-                        <span className="material-icons-outlined" style={{ fontSize: '16px', verticalAlign: 'middle' }}>description</span>
-                        생성된 추천 스크립트
-                      </h4>
-                      <p style={{ lineHeight: '1.5', color: '#333' }}>{currentReport.ui_snapshot.planScript}</p>
-                    </div>
-                  )}
-
-                </div>
-              </section>
-
-              {/* 3. Report (Right) */}
-              <section className="detail-col report-col" style={{ flex: 1.2, background: '#fff', display: 'flex', flexDirection: 'column', minWidth: '400px' }}>
-                <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
-                  <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>summarize</span>
-                  최종 상담 보고서
-                </div>
-                <div className="markdown-content" style={{ padding: '30px', overflowY: 'auto', flex: 1 }}>
-                  {/* Re-use ReactMarkdown */}
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {currentReport.report}
-                  </ReactMarkdown>
-                </div>
-              </section>
-
+              )}
             </div>
-          </div>
-        )}
+          )
+        }
 
-        {view === 'samples' && (
-          <div className="samples-view">
-            <div className="samples-header">
-              <h2>샘플 대화 목록</h2>
-              <button onClick={() => setView('main')} className="back-btn">
-                <span className="material-icons-outlined">arrow_back</span>
-                돌아가기
-              </button>
-            </div>
+        {
+          view === 'report_detail' && currentReport && (
+            <div className="report-detail-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#f5f7fa', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000 }}>
+              {/* Detail Header */}
+              <header className="detail-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 25px', background: '#fff', borderBottom: '1px solid #e0e0e0', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                <div className="header-info" style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                  <button
+                    onClick={() => setView('history')}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', color: '#666', fontSize: '15px' }}
+                  >
+                    <span className="material-icons-outlined" style={{ marginRight: '5px' }}>arrow_back</span>
+                    목록으로
+                  </button>
+                  <div style={{ width: '1px', height: '20px', background: '#e0e0e0' }}></div>
+                  <div>
+                    <h2 style={{ margin: 0, fontSize: '18px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span>{currentReport.customer_phone ? `고객: ${currentReport.customer_phone}` : '고객 정보 없음'}</span>
+                      <span style={{ fontSize: '14px', color: '#888', fontWeight: 'normal' }}>| {new Date(currentReport.created_at).toLocaleString()}</span>
+                    </h2>
+                    <span style={{ fontSize: '12px', color: '#aaa' }}>ID: {currentReport.reportId}</span>
+                  </div>
+                </div>
 
-            <div className="sample-list">
-              {sampleList.map(sample => (
-                <div
-                  key={sample.id}
-                  className="sample-item"
-                  onClick={() => loadSampleConversation(sample.id)}
+                <button
+                  onClick={() => {
+                    setView('main')
+                    setMessages([])
+                    setCurrentReport(null)
+                  }}
+                  style={{ padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '500' }}
                 >
-                  <div className="sample-number">#{sample.id}</div>
-                  <div className="sample-info">
-                    <h3 className="sample-title">{sample.title}</h3>
+                  상담으로 돌아가기
+                </button>
+              </header>
+
+              {/* 3-Column Layout */}
+              <div className="detail-content" style={{ display: 'flex', flex: 1, overflow: 'hidden', gap: '2px' }}>
+
+                {/* 1. Chat Log (Left) */}
+                <section className="detail-col text-col" style={{ flex: 1, background: '#fff', borderRight: '1px solid #e0e0e0', display: 'flex', flexDirection: 'column', minWidth: '350px' }}>
+                  <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
+                    <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>chat</span>
+                    상담 대화 내용
                   </div>
-                  <span className="material-icons-outlined sample-arrow">arrow_forward</span>
-                </div>
-              ))}
+                  <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+                    {messages.map((msg, idx) => (
+                      <div key={idx} className={`chat-bubble ${msg.role}`} style={{ opacity: 0.9 }}>
+                        <div className="bubble-content">
+                          <span className="bubble-author">
+                            {msg.role === 'user' ? '고객' : '상담사'}
+                          </span>
+                          <div className="bubble-text">{msg.content}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                {/* 2. RAG/Upsell Context (Center) */}
+                <section className="detail-col context-col" style={{ flex: 1, background: '#f8fafc', borderRight: '1px solid #e0e0e0', display: 'flex', flexDirection: 'column', minWidth: '350px' }}>
+                  <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
+                    <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>psychology</span>
+                    상담 당시 AI 제안 (RAG & Upsell)
+                  </div>
+                  <div className="context-content" style={{ padding: '20px', overflowY: 'auto', flex: 1 }}>
+
+                    {/* Recovered Intent */}
+                    <div className="info-card intent-card" style={{ marginBottom: '20px' }}>
+                      <h3>당시 고객 의중 파악</h3>
+                      <p style={{ marginTop: '10px', color: '#333' }}>
+                        {currentReport.ui_snapshot?.customerIntent || '기록된 의중 데이터 없음'}
+                      </p>
+                    </div>
+
+                    {/* Recovered Plans */}
+                    <div className="info-card plans-card">
+                      <h3>제안된 요금제</h3>
+                      <div className="plans-list" style={{ marginTop: '15px' }}>
+                        {(currentReport.ui_snapshot?.recommendedPlans || []).length === 0 ? (
+                          <p style={{ color: '#999', fontStyle: 'italic' }}>제안된 요금제 없음</p>
+                        ) : (
+                          (currentReport.ui_snapshot?.recommendedPlans || []).map((plan, idx) => (
+                            <div
+                              key={idx}
+                              className={`plan-item ${plan.id === currentReport.ui_snapshot?.selectedPlanId ? 'selected' : ''}`}
+                              style={{
+                                border: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '2px solid #3b82f6' : '1px solid #e2e8f0',
+                                background: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#eff6ff' : '#fff'
+                              }}
+                            >
+                              <h4 style={{ color: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#1d4ed8' : '#333' }}>{plan.name}</h4>
+                              <p className="plan-detail">월 {plan.price}원, {plan.data}</p>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Recovered Script */}
+                    {currentReport.ui_snapshot?.planScript && (
+                      <div className="plan-script-box" style={{ marginTop: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                        <h4 style={{ marginBottom: '10px', fontSize: '14px', color: '#555' }}>
+                          <span className="material-icons-outlined" style={{ fontSize: '16px', verticalAlign: 'middle' }}>description</span>
+                          생성된 추천 스크립트
+                        </h4>
+                        <p style={{ lineHeight: '1.5', color: '#333' }}>{currentReport.ui_snapshot.planScript}</p>
+                      </div>
+                    )}
+
+                  </div>
+                </section>
+
+                {/* 3. Report (Right) */}
+                <section className="detail-col report-col" style={{ flex: 1.2, background: '#fff', display: 'flex', flexDirection: 'column', minWidth: '400px' }}>
+                  <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
+                    <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>summarize</span>
+                    최종 상담 보고서
+                  </div>
+                  <div className="markdown-content" style={{ padding: '30px', overflowY: 'auto', flex: 1 }}>
+                    {/* Re-use ReactMarkdown */}
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {currentReport.report}
+                    </ReactMarkdown>
+                  </div>
+                </section>
+
+              </div>
             </div>
-          </div>
-        )}
-      </main>
-    </div>
+          )
+        }
+
+        {
+          view === 'samples' && (
+            <div className="samples-view">
+              <div className="samples-header">
+                <h2>샘플 대화 목록</h2>
+                <button onClick={() => setView('main')} className="back-btn">
+                  <span className="material-icons-outlined">arrow_back</span>
+                  돌아가기
+                </button>
+              </div>
+
+              <div className="sample-list">
+                {sampleList.map(sample => (
+                  <div
+                    key={sample.id}
+                    className="sample-item"
+                    onClick={() => loadSampleConversation(sample.id)}
+                  >
+                    <div className="sample-number">#{sample.id}</div>
+                    <div className="sample-info">
+                      <h3 className="sample-title">{sample.title}</h3>
+                    </div>
+                    <span className="material-icons-outlined sample-arrow">arrow_forward</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        }
+      </main >
+    </div >
   )
 }
