@@ -142,7 +142,7 @@ export default function AgentDashboard() {
       }
 
       // 상태 업데이트
-      setCustomerIntent(data.intent_description || data.customer_intent)
+      setCustomerIntent(data.customer_intent)
 
       // 추천 요금제 매핑
       const plans = (data.recommended_plans || []).map((plan, idx) => ({
@@ -763,6 +763,21 @@ export default function AgentDashboard() {
                   <div className="info-card plans-card">
                     <h2>추천 요금제</h2>
                     <p className="plans-subtitle">고객에게 제안할 요금제:</p>
+
+                    {/* Current Plan Display (Top of list, Read-only) - Improved Design */}
+                    {customerInfo && customerInfo.plan && (
+                      <div className="current-plan-display-v2">
+                        <div className="current-label">현재 이용중</div>
+                        <div className="current-plan-row">
+                          <div className="current-plan-info">
+                            <span className="current-plan-name">{customerInfo.plan}</span>
+                            <span className="current-plan-price">{customerInfo.billing?.toLocaleString() || '35,000'}원</span>
+                          </div>
+                          <div className="current-plan-badge">사용중</div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="plans-list">
                       {recommendedPlans.length === 0 ? (
                         <div className="empty-plans">
@@ -776,7 +791,21 @@ export default function AgentDashboard() {
                             onClick={() => handlePlanSelect(plan.id)}
                           >
                             <h4 className={plan.selected ? 'plan-name-selected' : ''}>{plan.name}</h4>
-                            <p className="plan-detail">월 {plan.price}원, {plan.data}</p>
+                            <div className="plan-detail-row">
+                              <span className="plan-price">월 {plan.price}원</span>
+                              <span className="plan-data">{plan.data}</span>
+                            </div>
+                            {customerInfo && (
+                              <div className="price-diff-badge">
+                                {(() => {
+                                  const currentPrice = customerInfo.billing || 35000;
+                                  const diff = plan.rawPrice - currentPrice;
+                                  if (diff > 0) return <span className="diff-plus">+{diff.toLocaleString()}원</span>;
+                                  if (diff < 0) return <span className="diff-minus">{diff.toLocaleString()}원</span>;
+                                  return <span className="diff-zero">동일 요금</span>;
+                                })()}
+                              </div>
+                            )}
                           </div>
                         ))
                       )}
