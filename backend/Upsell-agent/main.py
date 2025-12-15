@@ -2,6 +2,8 @@
 import os
 import sys
 from pathlib import Path
+import httpx
+import json
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,13 +14,14 @@ from dotenv import load_dotenv
 # 프로젝트 루트를 Python 경로에 추가
 sys.path.insert(0, str(Path(__file__).parent))
 
-from analysis.intent_analyzer import IntentAnalyzerGraph
+from analysis.intent_analyzer import IntentAnalyzerGraph, PLAN_DATABASE
 
 # 환경 변수 로드
 load_dotenv()
 
 # 전역 변수
 intent_analyzer: Optional[IntentAnalyzerGraph] = None
+CUSTOMER_API_URL = os.getenv("CUSTOMER_API_URL", "http://localhost:3000/active-call")
 
 
 @asynccontextmanager
@@ -43,6 +46,7 @@ async def lifespan(app: FastAPI):
         print("=" * 50)
         print("초기화 완료! 서버가 준비되었습니다.")
         print("포트: 8008")
+        print(f"MainBackend URL: {CUSTOMER_API_URL}")
         print("=" * 50)
         
     except Exception as e:
@@ -124,6 +128,67 @@ class QuickAnalyzeRequest(BaseModel):
     current_plan_name: str = Field(default="LTE30+", description="현재 요금제 이름")
     current_plan_fee: int = Field(default=35000, description="현재 월 요금")
 
+class ScriptRequest(BaseModel):
+    """스크립트 생성 요청"""
+    conversation_history: List[Dict[str, str]]
+    current_plan: PlanInfo
+    target_plan: PlanInfo
+    customer_intent: Optional[str] = "neutral"
+    intent_description: Optional[str] = ""
+
+class ScriptResponse(BaseModel):
+    """스크립트 생성 응답"""
+    script: str
+
+async def fetch_customer_info() -> Dict[str, Any]:
+    """MainBackend에서 현재 통화 중인 고객 정보 조회"""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(CUSTOMER_API_URL, timeout=3.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("active") and data.get("call"):
+                    customer = data["call"]["customer"]
+                    # 데이터 포맷팅
+                    return {
+                        "name": customer.get("이름"),
+                        "age": customer.get("나이"),
+                        "phone": customer.get("번호"),
+                        "plan": customer.get("요금제"),
+                        "usage": {
+                            "prev": customer.get("전월 데이터"),
+                            "curr": customer.get("현월 데이터")
+                        }
+                    }
+    except Exception as e:
+        print(f"고객 정보 조회 실패: {e}")
+    return {}
+
+def estimate_billing(plan_name: str) -> int:
+    """요금제 이름으로 월 요금 추정 (기본료)"""
+    for segment in PLAN_DATABASE.values():
+        for plan in segment:
+            if plan["plan_name"] == plan_name:
+                return plan["monthly_fee"]
+    return 0
+
+@app.post("/generate-script", response_model=ScriptResponse)
+async def generate_script_endpoint(request: ScriptRequest):
+    """추천 스크립트 생성"""
+    global intent_analyzer
+    if intent_analyzer is None:
+        raise HTTPException(status_code=503, detail="Not initialized")
+    
+    script = intent_analyzer.generate_script(
+        conversation_history=request.conversation_history,
+        current_plan=request.current_plan.model_dump(),
+        target_plan=request.target_plan.model_dump(),
+        customer_intent=request.customer_intent,
+        intent_description=request.intent_description
+    )
+    return ScriptResponse(script=script)
+
+
 
 @app.get("/")
 async def root():
@@ -166,13 +231,43 @@ async def analyze_conversation(request: AnalyzeRequest):
             "call_limit": request.current_plan.call_limit,
             "plan_tier": request.current_plan.plan_tier
         }
+
+        # 고객 정보가 없으면 자동 조회
+        customer_info = request.customer_info
+        if not customer_info:
+            data = await fetch_customer_info()
+            if data:
+                # Billing calculation logic
+                billing = estimate_billing(data.get("plan"))
+                if billing == 0:
+                    billing = current_plan["monthly_fee"]
+                
+                customer_info = {
+                    "name": data.get("name"),
+                    "age": data.get("age"),
+                    "usage": data.get("usage"),
+                    "billing": billing,
+                    "segment": "general" # TODO: infer segment
+                }
+                
+                # Update current plan if found
+                if data.get("plan") and data.get("plan") != "Unknown":
+                    current_plan["plan_name"] = data.get("plan")
+                    current_plan["monthly_fee"] = billing
+                    # Tier inference could be improved
+                    if billing >= 60000:
+                        current_plan["plan_tier"] = "premium"
+                    elif billing >= 40000:
+                        current_plan["plan_tier"] = "standard"
+                    else:
+                        current_plan["plan_tier"] = "basic"
         
         # 분석 실행
         result = intent_analyzer.invoke(
             conversation_history=request.conversation_history,
             current_plan=current_plan,
             rag_suggestion=request.rag_suggestion,
-            customer_info=request.customer_info
+            customer_info=customer_info
         )
         
         return AnalyzeResponse(
@@ -224,10 +319,26 @@ async def quick_analyze(request: QuickAnalyzeRequest):
             "plan_tier": tier
         }
         
+        # 고객 정보 자동 조회 (Quick Analyze에서도 적용)
+        customer_info = {}
+        data = await fetch_customer_info()
+        if data:
+            billing = estimate_billing(data.get("plan"))
+            customer_info = {
+                "name": data.get("name"),
+                "age": data.get("age"),
+                "usage": data.get("usage"),
+                "billing": billing or request.current_plan_fee
+            }
+            if data.get("plan"):
+                 current_plan["plan_name"] = data.get("plan")
+                 current_plan["monthly_fee"] = billing or request.current_plan_fee
+        
         # 분석 실행
         result = intent_analyzer.invoke(
             conversation_history=request.conversation_history,
-            current_plan=current_plan
+            current_plan=current_plan,
+            customer_info=customer_info
         )
         
         return AnalyzeResponse(
@@ -272,6 +383,14 @@ async def analyze_intent_only(request: QuickAnalyzeRequest):
             "call_limit": "무제한",
             "plan_tier": "standard"
         }
+
+        # 고객 정보 자동 조회
+        data = await fetch_customer_info()
+        if data:
+             billing = estimate_billing(data.get("plan"))
+             if data.get("plan"):
+                 current_plan["plan_name"] = data.get("plan")
+                 current_plan["monthly_fee"] = billing or request.current_plan_fee
         
         # 분석 실행
         result = intent_analyzer.invoke(
@@ -299,4 +418,3 @@ if __name__ == "__main__":
     import uvicorn
     # rag-agent (8000)와 분리된 포트 사용
     uvicorn.run(app, host="0.0.0.0", port=8008)
-

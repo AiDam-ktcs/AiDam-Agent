@@ -1208,6 +1208,97 @@ html,
 }
 
 /* ========================================
+   New UI Elements (Current Plan & Price Diff)
+   ======================================== */
+
+.current-plan-display-v2 {
+  background: white;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.2);
+}
+
+.current-plan-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.current-plan-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.current-plan-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.current-plan-price {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.current-plan-badge {
+  background: var(--primary);
+  color: white;
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.current-label {
+  display: none;
+}
+
+/* Plan Detail Layout Update */
+.plan-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  width: 100%;
+}
+
+.plan-price {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.price-diff-badge {
+  display: flex;
+  justify-content: flex-end;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px dashed var(--border-color);
+}
+
+.diff-plus {
+  color: #ef4444;
+  /* Red for price increase */
+}
+
+.diff-minus {
+  color: #10b981;
+  /* Green for price decrease */
+}
+
+.diff-zero {
+  color: var(--text-secondary);
+}
+
+/* ========================================
    History View
    ======================================== */
 

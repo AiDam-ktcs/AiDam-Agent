@@ -142,13 +142,14 @@ export default function AgentDashboard() {
       }
 
       // 상태 업데이트
-      setCustomerIntent(data.intent_description || data.customer_intent)
+      setCustomerIntent(data.customer_intent)
 
       // 추천 요금제 매핑
       const plans = (data.recommended_plans || []).map((plan, idx) => ({
         id: idx,
         name: plan.plan_name,
         price: plan.monthly_fee.toLocaleString(),
+        rawPrice: plan.monthly_fee,
         data: plan.data_limit,
         selected: false
       }))
@@ -457,18 +458,33 @@ export default function AgentDashboard() {
     setPlanScript('')
 
     try {
-      // 현재 대화 맥락을 포함한 스크립트 생성 요청
-      const response = await fetch(`${API_URL}/rag/chat`, {
+      // 현재 대화 맥락을 포함한 스크립트 생성 요청 (Upsell Agent)
+      const response = await fetch(`${UPSELL_AGENT_URL}/generate-script`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: `고객에게 "${selectedPlan.name}" 요금제(월 ${selectedPlan.price}원, ${selectedPlan.data})를 추천하는 스크립트를 작성해주세요. 현재 대화 맥락을 고려해서 자연스럽게 제안하는 멘트를 만들어주세요.`,
-          history: messages.map(m => ({ role: m.role, content: m.content }))
+          conversation_history: messages.map(m => ({ role: m.role, content: m.content })),
+          current_plan: {
+            plan_name: customerInfo?.plan || 'Unknown',
+            monthly_fee: 0,
+            data_limit: 'Unknown',
+            call_limit: '무제한',
+            plan_tier: 'standard'
+          },
+          target_plan: {
+            plan_name: selectedPlan.name,
+            monthly_fee: selectedPlan.rawPrice || parseInt(selectedPlan.price.replace(/,/g, '') || '0'),
+            data_limit: selectedPlan.data,
+            call_limit: '무제한',
+            plan_tier: 'standard'
+          },
+          customer_intent: 'neutral',
+          intent_description: customerIntent
         })
       })
 
       const data = await response.json()
-      setPlanScript(data.answer || '스크립트를 생성할 수 없습니다.')
+      setPlanScript(data.script || '스크립트를 생성할 수 없습니다.')
     } catch (error) {
       console.error('Script generation error:', error)
       setPlanScript(`고객님, 현재 사용량을 분석해본 결과 "${selectedPlan.name}" 요금제가 가장 적합해 보입니다. 월 ${selectedPlan.price}원에 ${selectedPlan.data}가 제공되어 현재보다 더 합리적으로 이용하실 수 있습니다. 변경을 도와드릴까요?`)
@@ -747,6 +763,21 @@ export default function AgentDashboard() {
                   <div className="info-card plans-card">
                     <h2>추천 요금제</h2>
                     <p className="plans-subtitle">고객에게 제안할 요금제:</p>
+
+                    {/* Current Plan Display (Top of list, Read-only) - Improved Design */}
+                    {customerInfo && customerInfo.plan && (
+                      <div className="current-plan-display-v2">
+                        <div className="current-label">현재 이용중</div>
+                        <div className="current-plan-row">
+                          <div className="current-plan-info">
+                            <span className="current-plan-name">{customerInfo.plan}</span>
+                            <span className="current-plan-price">{customerInfo.billing?.toLocaleString() || '35,000'}원</span>
+                          </div>
+                          <div className="current-plan-badge">사용중</div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="plans-list">
                       {recommendedPlans.length === 0 ? (
                         <div className="empty-plans">
@@ -760,7 +791,21 @@ export default function AgentDashboard() {
                             onClick={() => handlePlanSelect(plan.id)}
                           >
                             <h4 className={plan.selected ? 'plan-name-selected' : ''}>{plan.name}</h4>
-                            <p className="plan-detail">월 {plan.price}원, {plan.data}</p>
+                            <div className="plan-detail-row">
+                              <span className="plan-price">월 {plan.price}원</span>
+                              <span className="plan-data">{plan.data}</span>
+                            </div>
+                            {customerInfo && (
+                              <div className="price-diff-badge">
+                                {(() => {
+                                  const currentPrice = customerInfo.billing || 35000;
+                                  const diff = plan.rawPrice - currentPrice;
+                                  if (diff > 0) return <span className="diff-plus">+{diff.toLocaleString()}원</span>;
+                                  if (diff < 0) return <span className="diff-minus">{diff.toLocaleString()}원</span>;
+                                  return <span className="diff-zero">동일 요금</span>;
+                                })()}
+                              </div>
+                            )}
                           </div>
                         ))
                       )}
