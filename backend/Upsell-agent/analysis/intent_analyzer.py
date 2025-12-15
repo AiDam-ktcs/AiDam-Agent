@@ -77,11 +77,17 @@ class IntentAnalyzerGraph:
 
 반드시 유효한 JSON 형식으로만 응답하세요.
 
-현재 고객 요금제 정보:
+
+현재 고객 상세 정보:
+- 이름: {customer_name}
+- 나이: {customer_age}
 - 요금제명: {current_plan_name}
-- 월 요금: {current_plan_fee}원
-- 데이터: {current_plan_data}
+- 월 기본료: {current_plan_fee}원
+- 데이터 기본제공: {current_plan_data}
 - 요금제 등급: {current_plan_tier}
+- 전월 데이터 사용량: {prev_month_usage}
+- 현월 데이터 사용량: {curr_month_usage}
+- 예상 청구 금액(현월): {estimated_billing}원 (기본료 기준)
 """),
             ("human", """대화 이력:
 {conversation_history}
@@ -132,14 +138,38 @@ RAG 에이전트 제안 내용:
 - 신뢰도: {intent_confidence}
 - 감정 점수: {sentiment_score}
 
-현재 요금제 정보:
-- 요금제명: {current_plan_name}
-- 월 요금: {current_plan_fee}원
-- 요금제 등급: {current_plan_tier}
+현재 고객 상황:
+- 성명/나이: {customer_name} ({customer_age})
+- 현재 요금제: {current_plan_name} ({current_plan_fee}원, {current_plan_tier})
+- 데이터 사용현황: 전월 {prev_month_usage} / 현월 {curr_month_usage}
+- 예상 청구액: {estimated_billing}원
 
 업셀링 가능성을 판단하고 JSON 형식으로 반환하세요. reasoning_steps에는 판단에 이르게 된 논리적 사고 과정을 순서대로 3~4단계로 서술하세요.""")
         ])
         
+        # 스크립트 생성 프롬프트
+        self.script_prompt = ChatPromptTemplate.from_messages([
+            ("system", """당신은 베테랑 통신사 상담사입니다.
+고객에게 새로운 요금제를 제안하는 자연스럽고 설득력 있는 스크립트를 작성해주세요.
+
+맥락:
+- 고객은 '{customer_intent}' 상태입니다 ({intent_description}).
+- 현재 요금제: {current_plan_name} ({current_plan_fee}원)
+- 추천 요금제: {target_plan_name} ({target_plan_fee}원, {target_plan_data})
+- 핵심 소구점: {selling_point}
+
+작성 지침:
+- 고객의 현재 상황(데이터 부족, 요금 부담 등)을 공감하며 시작하세요.
+- 추천 요금제의 장점을 명확히 설명하되, 고객의 니즈와 연결하세요.
+- 너무 길지 않게(3~4문장), 구어체로 자연스럽게 작성하세요.
+- "고객님," 으로 시작하세요.
+"""),
+            ("human", """대화 이력:
+{conversation_history}
+
+위 대화 흐름을 이어가면서 자연스럽게 요금제를 권유하는 스크립트를 작성해주세요.""")
+        ])
+
         # 그래프 구축
         self.graph = self._build_graph()
     
@@ -179,7 +209,12 @@ RAG 에이전트 제안 내용:
             current_plan_name=current_plan.get("plan_name", "알 수 없음"),
             current_plan_fee=current_plan.get("monthly_fee", 0),
             current_plan_data=current_plan.get("data_limit", "알 수 없음"),
-            current_plan_tier=current_plan.get("plan_tier", "standard")
+            current_plan_tier=current_plan.get("plan_tier", "standard"),
+            customer_name=state.get("customer_info", {}).get("name", "고객"),
+            customer_age=state.get("customer_info", {}).get("age", "알 수 없음"),
+            prev_month_usage=state.get("customer_info", {}).get("usage", {}).get("prev", "정보 없음"),
+            curr_month_usage=state.get("customer_info", {}).get("usage", {}).get("curr", "정보 없음"),
+            estimated_billing=state.get("customer_info", {}).get("billing", current_plan.get("monthly_fee", 0))
         )
         
         response = self.llm.invoke(prompt)
@@ -212,9 +247,14 @@ RAG 에이전트 제안 내용:
             intent_description=state.get("intent_description", ""),
             intent_confidence=state["intent_confidence"],
             sentiment_score=state["sentiment_score"],
+            customer_name=state.get("customer_info", {}).get("name", "고객"),
+            customer_age=state.get("customer_info", {}).get("age", "알 수 없음"),
             current_plan_name=current_plan.get("plan_name", "알 수 없음"),
             current_plan_fee=current_plan.get("monthly_fee", 0),
-            current_plan_tier=current_plan.get("plan_tier", "standard")
+            current_plan_tier=current_plan.get("plan_tier", "standard"),
+            prev_month_usage=state.get("customer_info", {}).get("usage", {}).get("prev", "정보 없음"),
+            curr_month_usage=state.get("customer_info", {}).get("usage", {}).get("curr", "정보 없음"),
+            estimated_billing=state.get("customer_info", {}).get("billing", current_plan.get("monthly_fee", 0))
         )
         
         response = self.llm.invoke(prompt)
@@ -362,3 +402,41 @@ RAG 에이전트 제안 내용:
             "recommended_plans": result["recommended_plans"]
         }
 
+
+    def generate_script(
+        self,
+        conversation_history: List[Dict[str, str]],
+        current_plan: Dict[str, Any],
+        target_plan: Dict[str, Any],
+        customer_intent: str = "neutral",
+        intent_description: str = ""
+    ) -> str:
+        """추천 스크립트 생성"""
+        
+        # 대화 이력 포맷팅
+        history_text = "\n".join([
+            f"{msg['role']}: {msg['content']}"
+            for msg in conversation_history[-5:]  # 최근 5개만
+        ])
+        
+        # 소구점 파악 (간단한 로직)
+        selling_point = "더 많은 혜택"
+        if target_plan.get("monthly_fee", 0) > current_plan.get("monthly_fee", 0):
+            selling_point = "더 많은 데이터와 풍부한 혜택"
+        elif target_plan.get("monthly_fee", 0) < current_plan.get("monthly_fee", 0):
+            selling_point = "통신비 절감"
+        
+        prompt = self.script_prompt.format_messages(
+            conversation_history=history_text,
+            customer_intent=customer_intent,
+            intent_description=intent_description,
+            current_plan_name=current_plan.get("plan_name", ""),
+            current_plan_fee=current_plan.get("monthly_fee", 0),
+            target_plan_name=target_plan.get("plan_name", ""),
+            target_plan_fee=target_plan.get("monthly_fee", 0),
+            target_plan_data=target_plan.get("data_limit", ""),
+            selling_point=selling_point
+        )
+        
+        response = self.llm.invoke(prompt)
+        return response.content
