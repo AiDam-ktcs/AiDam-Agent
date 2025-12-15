@@ -41,7 +41,7 @@ export default function RAGAssistant({ messages: conversationMessages }) {
     await fetchScript(tag.query)
   }
 
-  // 스크립트 요청
+  // 스크립트 요청 (맥락 분석 포함)
   const fetchScript = async (query) => {
     if (!query.trim() || loading) return
 
@@ -53,11 +53,21 @@ export default function RAGAssistant({ messages: conversationMessages }) {
         history: history
       })
 
+      // 맥락 분석 결과: SKIP된 경우 처리
+      if (response.data.skipped) {
+        console.log(`⏭️  가이드 생성 스킵: ${query} (이유: ${response.data.reason})`)
+        // 히스토리만 업데이트, 화면에 표시하지 않음
+        setHistory(response.data.history)
+        return
+      }
+
+      // GENERATE된 경우: 정상적으로 스크립트 표시
       const newScript = {
         id: Date.now(),
         title: query,
         content: response.data.answer,
-        sources: response.data.sources || []
+        sources: response.data.sources || [],
+        reason: response.data.reason  // 생성 이유 저장 (옵션)
       }
       
       setScripts(prev => [...prev, newScript])

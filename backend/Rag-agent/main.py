@@ -89,6 +89,8 @@ class ChatResponse(BaseModel):
     answer: str
     sources: List[Dict[str, Any]]
     history: List[Dict[str, str]]
+    skipped: bool = False  # 맥락 분석 결과 SKIP 여부
+    reason: str = ""  # SKIP 또는 GENERATE 이유
 
 
 class SearchRequest(BaseModel):
@@ -122,7 +124,7 @@ async def chat(request: ChatRequest):
         )
     
     try:
-        # RAG 그래프 실행
+        # RAG 그래프 실행 (맥락 분석 포함)
         result = rag_graph.invoke(
             user_message=request.message,
             history=request.history
@@ -131,7 +133,9 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             answer=result["answer"],
             sources=result["sources"],
-            history=result["history"]
+            history=result["history"],
+            skipped=result.get("skipped", False),
+            reason=result.get("reason", "")
         )
         
     except Exception as e:

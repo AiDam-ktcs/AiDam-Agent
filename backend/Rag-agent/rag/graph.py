@@ -1,6 +1,7 @@
 """LangGraph를 사용한 RAG 플로우 정의"""
 import os
-from typing import Dict, Any
+import re
+from typing import Dict, Any, Literal
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, END
@@ -26,6 +27,13 @@ class RAGGraph:
         self.llm = ChatOpenAI(
             model=chat_model,
             temperature=0.3,
+            openai_api_key=os.getenv("OPENAI_API_KEY")
+        )
+        
+        # 맥락 판단용 경량 LLM (fallback용, 1%만 사용)
+        self.classifier_llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0,
             openai_api_key=os.getenv("OPENAI_API_KEY")
         )
         
@@ -66,19 +74,292 @@ class RAGGraph:
         self.graph = self._build_graph()
     
     def _build_graph(self) -> StateGraph:
-        """LangGraph 플로우 구축"""
+        """LangGraph 플로우 구축 (맥락 분석 포함)"""
         workflow = StateGraph(CallState)
         
         # 노드 추가
+        workflow.add_node("analyze_context", self._analyze_context)
         workflow.add_node("retrieve", self._retrieve_documents)
         workflow.add_node("generate", self._generate_answer)
         
-        # 엣지 정의
-        workflow.set_entry_point("retrieve")
+        # 진입점: 맥락 분석부터 시작
+        workflow.set_entry_point("analyze_context")
+        
+        # 조건부 엣지: 맥락 분석 결과에 따라 생성 여부 결정
+        workflow.add_conditional_edges(
+            "analyze_context",
+            self._should_generate,
+            {
+                "generate": "retrieve",  # 생성 필요 → 문서 검색
+                "skip": END              # 생성 불필요 → 종료
+            }
+        )
+        
+        # 순차 엣지
         workflow.add_edge("retrieve", "generate")
         workflow.add_edge("generate", END)
         
         return workflow.compile()
+    
+    def _analyze_context(self, state: CallState) -> Dict[str, Any]:
+        """맥락 분석 (하이브리드: 규칙 + Intent + LLM fallback)"""
+        utterance = state["recent_user_utterance"].strip()
+        history = state.get("history", [])
+        
+        # Step 1: 규칙 기반 빠른 필터 (80% 케이스)
+        rule_result = self._rule_based_filter(utterance, history)
+        if rule_result["decision"] in ["SKIP", "GENERATE_URGENT"]:
+            decision = "SKIP" if rule_result["decision"] == "SKIP" else "GENERATE"
+            return {
+                "context_decision": decision,
+                "decision_reason": rule_result["reason"],
+                "should_generate": decision == "GENERATE",
+                "importance_score": rule_result.get("importance", 0.0)
+            }
+        
+        # Step 2: Intent 변화 감지 (15% 케이스)
+        intent_result = self._check_intent_change(utterance, history, state.get("last_intent"))
+        if intent_result["changed"]:
+            return {
+                "context_decision": "GENERATE",
+                "current_intent": intent_result["current_intent"],
+                "last_intent": intent_result["previous_intent"],
+                "decision_reason": "intent_change",
+                "should_generate": True,
+                "importance_score": 0.9
+            }
+        
+        # Step 3: 중요도 기반 판단 (4% 케이스)
+        importance = self._calculate_importance(utterance)
+        if importance > 0.7:
+            return {
+                "context_decision": "GENERATE",
+                "current_intent": intent_result["current_intent"],
+                "decision_reason": "high_importance",
+                "should_generate": True,
+                "importance_score": importance
+            }
+        elif importance < 0.3:
+            return {
+                "context_decision": "SKIP",
+                "current_intent": intent_result["current_intent"],
+                "decision_reason": "low_importance",
+                "should_generate": False,
+                "importance_score": importance
+            }
+        
+        # Step 4: LLM 최종 판단 (1% 애매한 케이스)
+        llm_result = self._llm_final_decision(utterance, history)
+        return {
+            "context_decision": llm_result["decision"],
+            "current_intent": intent_result["current_intent"],
+            "decision_reason": "llm_fallback",
+            "should_generate": llm_result["decision"] == "GENERATE",
+            "importance_score": importance
+        }
+    
+    def _rule_based_filter(self, utterance: str, history: list) -> Dict[str, Any]:
+        """규칙 기반 1차 필터 (빠른 판단)"""
+        
+        # 규칙 1: 짧은 맞장구는 스킵
+        short_responses = [
+            "네", "예", "아", "오", "음", "어", "흠",
+            "감사합니다", "고맙습니다", "알겠습니다",
+            "네네", "예예", "넵", "넹", "응", "ㅇㅋ",
+            "좋아요", "괜찮아요", "그래요", "그렇구나"
+        ]
+        if utterance in short_responses or len(utterance) < 3:
+            return {
+                "decision": "SKIP",
+                "reason": "simple_acknowledgment",
+                "importance": 0.0
+            }
+        
+        # 규칙 2: 종료 신호 감지
+        end_signals = [
+            "됐습니다", "됐어요", "됐네요", "됐구나",
+            "끊을게요", "끊겠습니다", "괜찮습니다", "안 궁금해요",
+            "필요없어요", "필요없습니다", "됐으니까", "충분해요",
+            "이제 괜찮아요", "그만", "그럼 됐어"
+        ]
+        if any(signal in utterance for signal in end_signals):
+            return {
+                "decision": "SKIP",
+                "reason": "end_signal",
+                "importance": 0.0
+            }
+        
+        # 규칙 3: 최근 발화와 중복 체크
+        if history and len(history) > 0:
+            last_user_msg = None
+            for msg in reversed(history):
+                if msg.get("role") == "user":
+                    last_user_msg = msg.get("content", "")
+                    break
+            
+            if last_user_msg and utterance == last_user_msg:
+                return {
+                    "decision": "SKIP",
+                    "reason": "duplicate_utterance",
+                    "importance": 0.0
+                }
+        
+        # 규칙 4: 긴급 요청 감지 (즉시 생성)
+        urgent_keywords = [
+            "급해", "급합니다", "빨리", "빠르게", "지금", "당장",
+            "취소", "환불", "문제", "오류", "에러", "안돼", "안됨",
+            "불편", "불만", "화나", "짜증", "도대체", "왜"
+        ]
+        if any(kw in utterance for kw in urgent_keywords):
+            return {
+                "decision": "GENERATE_URGENT",
+                "reason": "urgent_request",
+                "importance": 1.0
+            }
+        
+        # 규칙 5: 질문 패턴 감지
+        question_keywords = ["?", "요?", "까?", "나요", "ㅂ니까", "습니까"]
+        if any(q in utterance for q in question_keywords):
+            return {
+                "decision": "GENERATE_URGENT",
+                "reason": "question_pattern",
+                "importance": 0.8
+            }
+        
+        # 애매한 케이스 → 다음 단계로
+        return {
+            "decision": "UNCERTAIN",
+            "reason": "uncertain",
+            "importance": 0.5
+        }
+    
+    def _check_intent_change(self, utterance: str, history: list, last_intent: str = None) -> Dict[str, Any]:
+        """Intent 변화 감지"""
+        current_intent = self._extract_intent(utterance)
+        
+        # 이전 intent 가져오기
+        if last_intent is None and history:
+            # 히스토리에서 마지막 user 발화의 intent 추정
+            for msg in reversed(history):
+                if msg.get("role") == "user":
+                    last_intent = self._extract_intent(msg.get("content", ""))
+                    break
+        
+        # Intent 변화 감지
+        changed = (
+            last_intent is not None and
+            current_intent != last_intent and
+            current_intent != "인사" and  # 인사는 intent 변화로 보지 않음
+            last_intent != "인사"
+        )
+        
+        return {
+            "changed": changed,
+            "current_intent": current_intent,
+            "previous_intent": last_intent
+        }
+    
+    def _extract_intent(self, utterance: str) -> str:
+        """Intent 추출 (키워드 기반)"""
+        intent_keywords = {
+            "요금제": ["요금제", "플랜", "가격", "비용", "금액", "얼마"],
+            "배송": ["배송", "배달", "도착", "언제", "받을", "수령"],
+            "반품환불": ["반품", "환불", "교환", "취소", "돌려"],
+            "기술지원": ["안돼", "안됨", "오류", "문제", "고장", "작동", "에러"],
+            "계정": ["로그인", "회원", "가입", "비밀번호", "계정", "아이디"],
+            "데이터": ["데이터", "용량", "사용량", "남은", "초과"],
+            "인사": ["안녕", "감사", "고마", "네", "예", "알겠"]
+        }
+        
+        for intent, keywords in intent_keywords.items():
+            if any(kw in utterance for kw in keywords):
+                return intent
+        
+        return "기타"
+    
+    def _calculate_importance(self, utterance: str) -> float:
+        """중요도 계산 (0.0 ~ 1.0)"""
+        score = 0.0
+        
+        # 길이 기반 점수
+        if len(utterance) > 20:
+            score += 0.3
+        elif len(utterance) > 10:
+            score += 0.2
+        elif len(utterance) > 5:
+            score += 0.1
+        
+        # 중요 키워드 포함 여부
+        important_keywords = [
+            "문의", "요청", "필요", "어떻게", "언제",
+            "해주세요", "알려주세요", "확인", "조회"
+        ]
+        keyword_count = sum(1 for kw in important_keywords if kw in utterance)
+        score += min(keyword_count * 0.2, 0.4)
+        
+        # 질문 패턴
+        if "?" in utterance or utterance.endswith(("요?", "까?", "나요?")):
+            score += 0.3
+        
+        return min(score, 1.0)
+    
+    def _llm_final_decision(self, utterance: str, history: list) -> Dict[str, Any]:
+        """LLM 기반 최종 판단 (fallback, 1% 케이스)"""
+        
+        # 최근 대화 내역
+        recent_history = history[-3:] if len(history) > 0 else []
+        history_text = "\n".join([
+            f"- {msg['role']}: {msg['content']}"
+            for msg in recent_history
+        ]) if recent_history else "대화 이력 없음"
+        
+        prompt = f"""당신은 콜센터 대화 분석 전문가입니다.
+현재 고객 발화를 분석하여 상담사에게 새로운 가이드가 필요한지 판단하세요.
+
+최근 대화:
+{history_text}
+
+현재 고객 발화: "{utterance}"
+
+새로운 가이드가 필요한 경우:
+1. 새로운 주제/문의로 전환
+2. 구체적인 질문이나 문제 제기
+3. 상담사의 추가 정보 필요
+4. 불만이나 긴급한 요청
+
+가이드가 불필요한 경우:
+1. 단순 인사말이나 맞장구
+2. 이미 답변한 주제의 단순 확인
+3. 대화 종료 신호
+4. 의미 없는 발화
+
+판단: "GENERATE" 또는 "SKIP"만 답변하세요."""
+
+        try:
+            response = self.classifier_llm.invoke(prompt)
+            decision = response.content.strip().upper()
+            
+            if "GENERATE" in decision:
+                return {"decision": "GENERATE"}
+            else:
+                return {"decision": "SKIP"}
+        except Exception as e:
+            print(f"⚠️  LLM 판단 실패, 기본값(GENERATE) 사용: {e}")
+            # LLM 실패 시 안전하게 GENERATE
+            return {"decision": "GENERATE"}
+    
+    def _should_generate(self, state: CallState) -> Literal["generate", "skip"]:
+        """생성 여부 판단 (조건부 엣지용)"""
+        decision = state.get("context_decision", "GENERATE")
+        reason = state.get("decision_reason", "unknown")
+        importance = state.get("importance_score", 0.5)
+        
+        if decision == "SKIP":
+            print(f"⏭️  [SKIP] {reason} (중요도: {importance:.2f}) - '{state['recent_user_utterance']}'")
+            return "skip"
+        else:
+            print(f"✅ [GENERATE] {reason} (중요도: {importance:.2f}) - '{state['recent_user_utterance']}'")
+            return "generate"
     
     def _retrieve_documents(self, state: CallState) -> Dict[str, Any]:
         """관련 문서 검색"""
@@ -129,19 +410,44 @@ class RAGGraph:
         }
     
     def invoke(self, user_message: str, history: list = None) -> Dict[str, Any]:
-        """그래프 실행"""
+        """그래프 실행 (맥락 분석 포함)"""
         if history is None:
             history = []
+        
+        # 이전 intent 추출
+        last_intent = None
+        for msg in reversed(history):
+            if msg.get("role") == "user":
+                last_intent = self._extract_intent(msg.get("content", ""))
+                break
         
         initial_state: CallState = {
             "recent_user_utterance": user_message,
             "history": history,
             "retrieved_docs": [],
-            "answer": ""
+            "answer": "",
+            "context_decision": None,
+            "current_intent": None,
+            "last_intent": last_intent,
+            "importance_score": None,
+            "decision_reason": None,
+            "should_generate": None
         }
         
         result = self.graph.invoke(initial_state)
         
+        # SKIP된 경우 처리
+        if result.get("context_decision") == "SKIP":
+            # 간단한 확인 응답만 반환 (히스토리 업데이트 없음)
+            return {
+                "answer": "",  # 빈 답변
+                "sources": [],
+                "history": history,  # 히스토리 변경 없음
+                "skipped": True,
+                "reason": result.get("decision_reason", "unknown")
+            }
+        
+        # GENERATE된 경우
         return {
             "answer": result["answer"],
             "sources": [
@@ -152,6 +458,8 @@ class RAGGraph:
                 }
                 for doc in result["retrieved_docs"]
             ],
-            "history": result["history"]
+            "history": result["history"],
+            "skipped": False,
+            "reason": result.get("decision_reason", "generated")
         }
 
