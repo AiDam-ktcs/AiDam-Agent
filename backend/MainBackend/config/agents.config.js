@@ -52,7 +52,8 @@ module.exports = {
         health: '/health',
         analyze: '/analyze',
         analyzeQuick: '/analyze/quick',
-        intentOnly: '/intent-only'
+        intentOnly: '/intent-only',
+        onMessage: '/event/on-message'
       }
     }
   },

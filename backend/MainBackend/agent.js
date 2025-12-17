@@ -157,7 +157,9 @@ app.post('/api/stt/call-start', (req, res) => {
     status: 'active', // 바로 active로 설정 (STT가 시작되었으므로)
     customer: customer || { '이름': 'Unknown', '번호': phoneNumber },
     startTime: timestamp || new Date().toISOString(),
-    messages: [] // 대화 내역 저장소 초기화
+    startTime: timestamp || new Date().toISOString(),
+    messages: [], // 대화 내역 저장소 초기화
+    upsellAnalysis: null // Upsell 분석 결과 초기화
   };
 
   saveConsultation(ACTIVE_CALL);
@@ -191,20 +193,46 @@ app.post('/api/stt/line', (req, res) => {
   saveConsultation(ACTIVE_CALL); // 매 줄마다 저장 (실시간성 보장 위해)
 
   console.log(`[STT] Line Received (${speaker}): ${text}`);
+
+  // Async: Forward to Upsell Agent (Fire-and-Forget)
+  // 분석이 필요한지는 Upsell Agent가 스스로 판단하도록 함
+  (async () => {
+    try {
+      const upsellAgent = agentsConfig.getAgent('upsell');
+      if (upsellAgent && upsellAgent.enabled) {
+        const url = agentsConfig.buildUrl('upsell', 'onMessage');
+
+        // 현재 활성 콜의 메타데이터(고객정보 등)도 함께 전송
+        const payload = {
+          message: newMessage,
+          recent_history: ACTIVE_CALL.messages.slice(-10), // 최근 10개 메시지 포함
+          active_call_context: {
+            callId: ACTIVE_CALL.callId,
+            customer: ACTIVE_CALL.customer,
+            current_plan: ACTIVE_CALL.customer['요금제'] || 'Unknown' // 단순화된 정보
+          },
+          history_length: ACTIVE_CALL.messages.length
+        };
+
+        // Non-blocking fetch
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          timeout: 5000 // 짧은 타임아웃
+        }).catch(err => console.error(`[System] Failed to forward to Upsell Agent: ${err.message}`));
+      }
+    } catch (e) {
+      console.error(`[System] Error triggering upsell logic: ${e.message}`);
+    }
+  })();
+
   res.json({ success: true });
 });
 
 // Legacy support for existing test (if any)
 app.post('/stt/incoming-call', (req, res) => {
-  // Redirect to new logic
   req.body.phoneNumber = req.body.phone_number;
-  // ... adapter logic if needed, or just keep it separate. 
-  // For now, let's keep it simple and redirect or just duplicate the minimal logic for backward compat if needed.
-  // But user asked to "move" simulation logic, so I will replace it.
-  // I will redirect simulation calls to use the new API from frontend.
-  // So I will just keep a minimal stub here or remove it if I am sure.
-  // Let's replace it with a redirect-like behavior or just keep the new one.
-  // Since I am replacing the block, the old one is gone.
   const { phone_number } = req.body;
   if (!phone_number) return res.status(400).json({ error: 'phone_number required' });
 
@@ -1049,6 +1077,29 @@ app.post('/upsell/intent-only', async (req, res) => {
 });
 
 /**
+ * POST /internal/upsell-result (NEW)
+ * Upsell Agent가 분석 결과를 푸시하는 내부 엔드포인트
+ */
+app.post('/internal/upsell-result', (req, res) => {
+  const { callId, analysisResult } = req.body;
+
+  if (!ACTIVE_CALL || ACTIVE_CALL.callId !== callId) {
+    // 활성 콜이 아니거나 종료된 콜일 수 있음
+    console.warn(`[Orchestrator] Received upsell result for inactive call: ${callId}`);
+    return res.json({ success: false, reason: 'inactive_call' });
+  }
+
+  console.log(`[Orchestrator] Received Upsell Analysis for ${callId}`);
+
+  // 활성 콜 상태 업데이트
+  ACTIVE_CALL.upsellAnalysis = analysisResult;
+
+  // 필요하다면 여기서 프론트엔드에 소켓 이벤트를 쏠 수도 있음 (현재는 폴링 방식이므로 데이터만 업데이트)
+
+  res.json({ success: true });
+});
+
+/**
  * 404 핸들러
  */
 app.use((req, res) => {
@@ -1068,7 +1119,8 @@ app.use((req, res) => {
       'POST /rag/search',
       'POST /upsell/analyze',
       'POST /upsell/analyze/quick',
-      'POST /upsell/intent-only'
+      'POST /upsell/intent-only',
+      'POST /internal/upsell-result'
     ]
   });
 });
@@ -1117,6 +1169,7 @@ app.listen(PORT, async () => {
   console.log('  - POST /upsell/analyze          (Upsell analysis)');
   console.log('  - POST /upsell/analyze/quick    (Quick upsell analysis)');
   console.log('  - POST /upsell/intent-only      (Intent analysis only)');
+  console.log('  - POST /internal/upsell-result  (Receive upsell result)');
   console.log('================================================\n');
 });
 
