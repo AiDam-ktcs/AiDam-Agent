@@ -50,8 +50,7 @@ class RAGGraph:
 6. 고객의 상황을 공감하거나 이해하는 표현을 자연스럽게 포함하세요.
 7. 필요한 경우 추가 안내나 확인이 필요한 사항을 부드럽게 제안하세요.
 8. 매뉴얼에 없는 내용은 "정확한 확인을 위해 추가 조회가 필요합니다" 등으로 안내하세요.
-9. 정보 확인이나 처리가 필요한 경우, 막연히 "확인이 필요합니다"가 아니라 구체적으로 무엇을 어떻게 확인할지 바로 요청하세요.
-   예: "신원 확인이 필요합니다" (X) → "성함과 생년월일을 말씀해주시겠어요?" (O)
+9. 상담사는 고객 정보(이름, 전화번호, 요금제, 사용량)를 이미 확인한 상태입니다. 본인 확인 절차를 요청하지 말고 바로 업무 안내를 하세요.
 10. 절차나 단계가 있는 상담은 현재 단계에서 바로 진행할 수 있는 구체적인 액션을 제시하세요.
     예: "가입하려면 절차가 필요합니다" (X) → "지금 바로 가입 도와드리겠습니다. 먼저..." (O)
 11. "추가로 궁금한 점", "더 도움이 필요하신", "다른 문의사항" 등의 형식적인 마무리 멘트는 절대 사용하지 마세요.
@@ -159,14 +158,14 @@ class RAGGraph:
         }
     
     def _rule_based_filter(self, utterance: str, history: list) -> Dict[str, Any]:
-        """규칙 기반 1차 필터 (빠른 판단)"""
+        """규칙 기반 1차 필터 (빠른 판단)
+        
+        순서: 용건/질문 먼저 체크 → 인사/감사만 있으면 SKIP
+        """
         
         # 규칙 1: 짧은 맞장구는 스킵
         short_responses = [
-            "네", "예", "아", "오", "음", "어", "흠",
-            "감사합니다", "고맙습니다", "알겠습니다",
-            "네네", "예예", "넵", "넹", "응", "ㅇㅋ",
-            "좋아요", "괜찮아요", "그래요", "그렇구나"
+            "네", "예", "음", "응", "넵", "알겠어요"
         ]
         if utterance in short_responses or len(utterance) < 3:
             return {
@@ -175,21 +174,7 @@ class RAGGraph:
                 "importance": 0.0
             }
         
-        # 규칙 2: 종료 신호 감지
-        end_signals = [
-            "됐습니다", "됐어요", "됐네요", "됐구나",
-            "끊을게요", "끊겠습니다", "괜찮습니다", "안 궁금해요",
-            "필요없어요", "필요없습니다", "됐으니까", "충분해요",
-            "이제 괜찮아요", "그만", "그럼 됐어"
-        ]
-        if any(signal in utterance for signal in end_signals):
-            return {
-                "decision": "SKIP",
-                "reason": "end_signal",
-                "importance": 0.0
-            }
-        
-        # 규칙 3: 최근 발화와 중복 체크
+        # 규칙 2: 최근 발화와 중복 체크
         if history and len(history) > 0:
             last_user_msg = None
             for msg in reversed(history):
@@ -204,11 +189,9 @@ class RAGGraph:
                     "importance": 0.0
                 }
         
-        # 규칙 4: 긴급 요청 감지 (즉시 생성)
+        # 규칙 3: 긴급 요청 감지 (용건 있음 → 즉시 생성)
         urgent_keywords = [
-            "급해", "급합니다", "빨리", "빠르게", "지금", "당장",
-            "취소", "환불", "문제", "오류", "에러", "안돼", "안됨",
-            "불편", "불만", "화나", "짜증", "도대체", "왜"
+            "취소", "환불", "문제", "안돼", "불편", "불만"
         ]
         if any(kw in utterance for kw in urgent_keywords):
             return {
@@ -217,13 +200,48 @@ class RAGGraph:
                 "importance": 1.0
             }
         
-        # 규칙 5: 질문 패턴 감지
-        question_keywords = ["?", "요?", "까?", "나요", "ㅂ니까", "습니까"]
+        # 규칙 4: 질문 패턴 감지 (용건 있음 → 생성)
+        question_keywords = ["?", "나요", "어떻게", "뭐예요"]
         if any(q in utterance for q in question_keywords):
             return {
                 "decision": "GENERATE_URGENT",
                 "reason": "question_pattern",
                 "importance": 0.8
+            }
+        
+        # 규칙 5: 용건 키워드 감지 (비즈니스 관련 → 생성)
+        business_keywords = [
+            "요금", "요금제", "변경", "해지", "가입", "결제",
+            "데이터", "로밍", "환불", "배송", "반품"
+        ]
+        if any(kw in utterance for kw in business_keywords):
+            return {
+                "decision": "GENERATE",
+                "reason": "business_request",
+                "importance": 0.7
+            }
+        
+        # 규칙 6: 인사/감사 표현만 있으면 → SKIP (용건 체크 후에!)
+        greeting_patterns = [
+            "감사합니다", "감사해요", "고마워요",
+            "안녕하세요", "수고하세요", "알겠습니다", "알겠어요"
+        ]
+        if any(pattern in utterance for pattern in greeting_patterns):
+            return {
+                "decision": "SKIP",
+                "reason": "greeting_only",
+                "importance": 0.0
+            }
+        
+        # 규칙 7: 종료 신호 감지
+        end_signals = [
+            "됐습니다", "됐어요", "끊을게요", "필요없어요"
+        ]
+        if any(signal in utterance for signal in end_signals):
+            return {
+                "decision": "SKIP",
+                "reason": "end_signal",
+                "importance": 0.0
             }
         
         # 애매한 케이스 → 다음 단계로
