@@ -80,6 +80,7 @@ async def startup_event():
 class ChatRequest(BaseModel):
     message: str
     history: List[Dict[str, str]] = []
+    force_generate: bool = False  # True면 스킵 로직 무시하고 무조건 생성
 
 
 class ChatResponse(BaseModel):
@@ -124,7 +125,8 @@ async def chat(request: ChatRequest):
         # RAG 그래프 실행 (맥락 분석 포함)
         result = rag_graph.invoke(
             user_message=request.message,
-            history=request.history
+            history=request.history,
+            force_generate=request.force_generate
         )
         
         return ChatResponse(

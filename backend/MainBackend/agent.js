@@ -744,7 +744,7 @@ app.delete('/reports/:id', (req, res) => {
  */
 app.post('/rag/chat', async (req, res) => {
   try {
-    const { message, history } = req.body;
+    const { message, history, force_generate } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: 'message is required' });
@@ -761,7 +761,7 @@ app.post('/rag/chat', async (req, res) => {
       });
     }
 
-    console.log(`[Orchestrator] Forwarding chat request to RAG Agent: ${message}`);
+    console.log(`[Orchestrator] Forwarding chat request to RAG Agent: ${message} (force: ${force_generate || false})`);
 
     const ragAgent = agentsConfig.getAgent('rag');
     const url = agentsConfig.buildUrl('rag', 'chat');
@@ -771,7 +771,8 @@ app.post('/rag/chat', async (req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message: message,
-        history: history || []
+        history: history || [],
+        force_generate: force_generate || false
       }),
       timeout: ragAgent.timeout
     });
