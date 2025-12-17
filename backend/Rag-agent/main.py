@@ -66,13 +66,13 @@ async def startup_event():
         print("=" * 50)
         
     except FileNotFoundError as e:
-        print(f"\n❌ 오류: {e}")
+        print(f"\n[ERROR] {e}")
         print("\nPDF 파일을 찾을 수 없습니다.")
         print("현재 작업 디렉토리:", os.getcwd())
         print("PDF 파일 경로:", os.path.abspath(pdf_path))
         raise
     except Exception as e:
-        print(f"\n❌ 초기화 중 오류 발생: {e}")
+        print(f"\n[ERROR] Initialization failed: {e}")
         raise
 
 

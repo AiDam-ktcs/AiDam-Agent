@@ -128,32 +128,13 @@ class RAGGraph:
                 "importance_score": 0.9
             }
         
-        # Step 3: 중요도 기반 판단 (4% 케이스)
+        # Step 3: 규칙에 안 걸리면 기본 GENERATE (안 중요한 것만 SKIP하고 나머지는 생성)
         importance = self._calculate_importance(utterance)
-        if importance > 0.7:
-            return {
-                "context_decision": "GENERATE",
-                "current_intent": intent_result["current_intent"],
-                "decision_reason": "high_importance",
-                "should_generate": True,
-                "importance_score": importance
-            }
-        elif importance < 0.3:
-            return {
-                "context_decision": "SKIP",
-                "current_intent": intent_result["current_intent"],
-                "decision_reason": "low_importance",
-                "should_generate": False,
-                "importance_score": importance
-            }
-        
-        # Step 4: LLM 최종 판단 (1% 애매한 케이스)
-        llm_result = self._llm_final_decision(utterance, history)
         return {
-            "context_decision": llm_result["decision"],
+            "context_decision": "GENERATE",
             "current_intent": intent_result["current_intent"],
-            "decision_reason": "llm_fallback",
-            "should_generate": llm_result["decision"] == "GENERATE",
+            "decision_reason": "default_generate",
+            "should_generate": True,
             "importance_score": importance
         }
     
@@ -189,39 +170,7 @@ class RAGGraph:
                     "importance": 0.0
                 }
         
-        # 규칙 3: 긴급 요청 감지 (용건 있음 → 즉시 생성)
-        urgent_keywords = [
-            "취소", "환불", "문제", "안돼", "불편", "불만"
-        ]
-        if any(kw in utterance for kw in urgent_keywords):
-            return {
-                "decision": "GENERATE_URGENT",
-                "reason": "urgent_request",
-                "importance": 1.0
-            }
-        
-        # 규칙 4: 질문 패턴 감지 (용건 있음 → 생성)
-        question_keywords = ["?", "나요", "어떻게", "뭐예요"]
-        if any(q in utterance for q in question_keywords):
-            return {
-                "decision": "GENERATE_URGENT",
-                "reason": "question_pattern",
-                "importance": 0.8
-            }
-        
-        # 규칙 5: 용건 키워드 감지 (비즈니스 관련 → 생성)
-        business_keywords = [
-            "요금", "요금제", "변경", "해지", "가입", "결제",
-            "데이터", "로밍", "환불", "배송", "반품"
-        ]
-        if any(kw in utterance for kw in business_keywords):
-            return {
-                "decision": "GENERATE",
-                "reason": "business_request",
-                "importance": 0.7
-            }
-        
-        # 규칙 6: 인사/감사 표현만 있으면 → SKIP (용건 체크 후에!)
+        # 규칙 3: 인사/감사 표현만 있으면 → SKIP
         greeting_patterns = [
             "감사합니다", "감사해요", "고마워요",
             "안녕하세요", "수고하세요", "알겠습니다", "알겠어요"
@@ -233,7 +182,7 @@ class RAGGraph:
                 "importance": 0.0
             }
         
-        # 규칙 7: 종료 신호 감지
+        # 규칙 4: 종료 신호 감지
         end_signals = [
             "됐습니다", "됐어요", "끊을게요", "필요없어요"
         ]
@@ -362,7 +311,7 @@ class RAGGraph:
             else:
                 return {"decision": "SKIP"}
         except Exception as e:
-            print(f"⚠️  LLM 판단 실패, 기본값(GENERATE) 사용: {e}")
+            print(f"[WARN] LLM decision failed, using default(GENERATE): {e}")
             # LLM 실패 시 안전하게 GENERATE
             return {"decision": "GENERATE"}
     
@@ -373,10 +322,10 @@ class RAGGraph:
         importance = state.get("importance_score", 0.5)
         
         if decision == "SKIP":
-            print(f"⏭️  [SKIP] {reason} (중요도: {importance:.2f}) - '{state['recent_user_utterance']}'")
+            print(f"[SKIP] {reason} (importance: {importance:.2f}) - '{state['recent_user_utterance']}'")
             return "skip"
         else:
-            print(f"✅ [GENERATE] {reason} (중요도: {importance:.2f}) - '{state['recent_user_utterance']}'")
+            print(f"[GENERATE] {reason} (importance: {importance:.2f}) - '{state['recent_user_utterance']}'")
             return "generate"
     
     def _retrieve_documents(self, state: CallState) -> Dict[str, Any]:
