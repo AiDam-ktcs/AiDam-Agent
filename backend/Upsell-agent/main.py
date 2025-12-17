@@ -140,6 +140,17 @@ class ScriptResponse(BaseModel):
     """스크립트 생성 응답"""
     script: str
 
+class ActiveCallContext(BaseModel):
+    callId: str
+    customer: Dict[str, Any]
+    current_plan: str
+
+class MessageEvent(BaseModel):
+    message: Dict[str, Any]
+    recent_history: List[Dict[str, Any]]
+    active_call_context: ActiveCallContext
+    history_length: int
+
 async def fetch_customer_info() -> Dict[str, Any]:
     """MainBackend에서 현재 통화 중인 고객 정보 조회"""
     try:
@@ -412,6 +423,99 @@ async def analyze_intent_only(request: QuickAnalyzeRequest):
             status_code=500,
             detail=f"분석 중 오류가 발생했습니다: {str(e)}"
         )
+
+
+
+@app.post("/event/on-message")
+async def on_message_event(event: MessageEvent):
+    """
+    메인 백엔드로부터 새로운 메시지 수신 (이벤트 기반 분석)
+    - 사용자 메시지인 경우에만 분석 시도 (또는 특정 조건)
+    - 분석 결과는 MainBackend의 /internal/upsell-result 로 푸시
+    """
+    global intent_analyzer
+    if intent_analyzer is None:
+        return {"status": "ignored", "reason": "not_initialized"}
+
+    # 1. 분석 조건 확인 (Throttling Logic)
+    # 예: 사용자 메시지일 때만, 그리고 대화가 어느 정도 진행되었을 때
+    if event.message.get("role") != "user":
+        return {"status": "ignored", "reason": "not_user_message"}
+    
+    # 예: 너무 초반이면 스킵 (인사말 등)
+    # [Mod for Test] 테스트를 위해 길이 제한을 완화합니다.
+    if event.history_length < 1: 
+        return {"status": "ignored", "reason": "not_enough_history"}
+
+    # 2. 분석 실행 (Background Task로 돌려도 되지만, 여기선 async로 바로 실행)
+    try:
+        print(f"Analyzing intent for call {event.active_call_context.callId}...")
+        
+        # 현재 요금제 정보 추정
+        plan_name = event.active_call_context.current_plan
+        monthly_fee = estimate_billing(plan_name)
+        if monthly_fee == 0:
+            monthly_fee = 35000 # Default
+        
+        tier = "standard"
+        if monthly_fee >= 60000: tier = "premium"
+        elif monthly_fee < 30000: tier = "basic"
+
+        current_plan = {
+            "plan_name": plan_name,
+            "monthly_fee": monthly_fee,
+            "data_limit": "알 수 없음",
+            "call_limit": "무제한",
+            "plan_tier": tier
+        }
+
+        # 고객 정보
+        customer_info = {
+            "name": event.active_call_context.customer.get("이름"),
+            "age": event.active_call_context.customer.get("나이"),
+            "usage": {
+                "prev": event.active_call_context.customer.get("전월 데이터"),
+                "curr": event.active_call_context.customer.get("현월 데이터")
+            }
+        }
+
+        # Intent Analyzer 호출
+        # 전체 히스토리가 아니라 recent_history만 사용해도 충분한지 확인 필요
+        # 하지만 Graph는 10개 정도면 충분하도록 설계됨
+        result = intent_analyzer.invoke(
+            conversation_history=event.recent_history,
+            current_plan=current_plan,
+            customer_info=customer_info
+        )
+
+        # 3. 결과 MainBackend로 전송
+        # 필요한 정보만 추려서 전송
+        analysis_payload = {
+            "customer_intent": result["customer_intent"],
+            "intent_description": result.get("intent_description", ""),
+            "upsell_possibility": result["upsell_possibility"],
+            "upsell_reason": result.get("upsell_reason", ""),
+            "reasoning_steps": result.get("reasoning_steps", []),
+            "recommended_plans": result["recommended_plans"][:1], # Top 1만 전송하거나 다 보내거나
+            "top_recommendation": result["recommended_plans"][0] if result["recommended_plans"] else None
+        }
+
+        # MainBackend로 Push
+        main_backend_url = "http://localhost:3000" # 내부 네트워크 주소
+        push_url = f"{main_backend_url}/internal/upsell-result"
+        
+        async with httpx.AsyncClient() as client:
+            await client.post(push_url, json={
+                "callId": event.active_call_context.callId,
+                "analysisResult": analysis_payload
+            }, timeout=3.0)
+            
+        print(f"Analysis result pushed to MainBackend for {event.active_call_context.callId}")
+        return {"status": "analyzed", "intent": result["customer_intent"]}
+
+    except Exception as e:
+        print(f"Event analysis failed: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 if __name__ == "__main__":

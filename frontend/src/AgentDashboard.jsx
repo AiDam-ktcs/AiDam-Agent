@@ -52,6 +52,49 @@ export default function AgentDashboard() {
             keywords: m.keywords
           })))
         }
+
+        // Backend-driven Upsell Analysis Update
+        if (data.call.upsellAnalysis) {
+          const result = data.call.upsellAnalysis;
+
+          // Update Intent logic
+          if (result.customer_intent) {
+            setCustomerIntent(result.customer_intent);
+          }
+
+          // Update Reasoning logic
+          // Update Reasoning logic
+          if (result.reasoning_steps && result.reasoning_steps.length > 0) {
+            setAiReasoning(result.reasoning_steps);
+          } else if (result.upsell_reason) {
+            setAiReasoning([result.upsell_reason]);
+          } else if (result.intent_description) {
+            // Format description as reasoning step
+            setAiReasoning([result.intent_description]);
+          }
+
+          // Update Recommended Plans logic
+          if (result.recommended_plans && result.recommended_plans.length > 0) {
+            const plans = result.recommended_plans.map((plan, idx) => ({
+              id: idx,
+              name: plan.plan_name,
+              price: plan.monthly_fee.toLocaleString(),
+              rawPrice: plan.monthly_fee,
+              data: plan.data_limit,
+              selected: false
+            }));
+            // avoid re-rendering loop or state overwrite if same?
+            // Simple implementation: overwrite if different length or force update
+            // better to check deep equality but for now overwrite is safe enough 
+            // as we poll every 2sec.
+            // Ideally check if plans changed.
+            // JSON stringify comparison:
+            // if (JSON.stringify(plans) !== JSON.stringify(recommendedPlans)) { setRecommendedPlans(plans); }
+            // Since we don't have deep access to prev state in polling function easily without ref,
+            // we will just set it. React handles atomic updates efficiently enough.
+            setRecommendedPlans(plans);
+          }
+        }
       } else if (callStatus === 'active') { // Call ended externally
         setCallStatus('ended')
         // Auto-navigate to Report Tab
@@ -107,77 +150,12 @@ export default function AgentDashboard() {
   }, [])
 
   // 대화가 업데이트될 때마다 의중 분석 (User 메시지인 경우)
-  useEffect(() => {
-    if (messages.length > 0) {
-      const lastMsg = messages[messages.length - 1]
-      // 실제로는 assistant 메시지 이후에도 반응할 수 있지만, user 입력에 반응하는 것이 일반적
-      if (lastMsg.role === 'user') {
-        analyzeIntent()
-      }
-    }
-  }, [messages])
+  // [REMOVED] Client-side trigger logic replaced by Backend-driven architecture
+  // useEffect(() => { ... }, [messages])
 
   // AI 의중 분석 (Upsell Agent 연결)
-  const analyzeIntent = async () => {
-    setIsAnalyzingIntent(true)
-
-    // 분석 시작 시점에는 간단한 상태만 표시 (또는 이전 사고 과정 초기화)
-    setAiReasoning(['대화의 맥락을 파악하고 있습니다...'])
-
-    try {
-      const payload = {
-        conversation_history: messages.map(m => ({ role: m.role, content: m.content })),
-        current_plan_name: customerInfo?.plan || 'Unknown',
-        current_plan_fee: 35000 // TODO: Fetch from pricing plan
-      }
-
-      const response = await fetch(`${UPSELL_AGENT_URL}/analyze/quick`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      })
-
-      if (!response.ok) {
-        throw new Error(`API Error: ${response.status}`)
-      }
-
-      const data = await response.json()
-
-      // AI의 실제 사고 과정으로 업데이트
-      if (data.reasoning_steps && data.reasoning_steps.length > 0) {
-        // 단계별로 표시되는 효과를 위해 순차적으로 업데이트할 수도 있지만,
-        // 여기서는 한번에 업데이트하거나, 원한다면 타이머를 둬서 하나씩 보여줄 수 있음.
-        // UX상 한번에 보여주는 것이 깔끔할 수 있음 (이미 분석이 끝났으므로)
-        setAiReasoning(data.reasoning_steps)
-      } else {
-        setAiReasoning(['특이사항이 발견되지 않았습니다.'])
-      }
-
-      // 상태 업데이트
-      setCustomerIntent(data.customer_intent)
-
-      // 추천 요금제 매핑
-      const plans = (data.recommended_plans || []).map((plan, idx) => ({
-        id: idx,
-        name: plan.plan_name,
-        price: plan.monthly_fee.toLocaleString(),
-        rawPrice: plan.monthly_fee,
-        data: plan.data_limit,
-        selected: false
-      }))
-
-      setRecommendedPlans(plans)
-
-    } catch (error) {
-      console.error('Intent analysis failed:', error)
-      setAiReasoning(['분석 서버 연결에 실패했습니다.'])
-      setCustomerIntent('시스템 오류 발생')
-    } finally {
-      setIsAnalyzingIntent(false)
-    }
-  }
+  // [REMOVED] Client-side trigger logic replaced by Backend-driven architecture
+  // const analyzeIntent = async () => { ... }
 
   const loadReports = async (phone = null) => {
     try {
