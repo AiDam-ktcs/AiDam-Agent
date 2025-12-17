@@ -437,15 +437,34 @@ async def on_message_event(event: MessageEvent):
     if intent_analyzer is None:
         return {"status": "ignored", "reason": "not_initialized"}
 
-    # 1. 분석 조건 확인 (Throttling Logic)
-    # 예: 사용자 메시지일 때만, 그리고 대화가 어느 정도 진행되었을 때
+    # 1. 분석 조건 확인 (Throttling Logic & Filtering)
+    current_message_content = event.message.get("content", "").strip()
+    
+    # [Rule 1] 사용자 메시지일 때만 분석
     if event.message.get("role") != "user":
         return {"status": "ignored", "reason": "not_user_message"}
     
-    # 예: 너무 초반이면 스킵 (인사말 등)
-    # [Mod for Test] 테스트를 위해 길이 제한을 완화합니다.
-    if event.history_length < 1: 
+    # [Rule 2] 너무 짧은 발화 무시 (네, 아니오 등) - 공백 제외 5글자 미만
+    if len(current_message_content) < 5:
+        return {"status": "ignored", "reason": "message_too_short"}
+
+    # [Rule 3] 단순 인사말 필터링
+    greeting_keywords = ["안녕하세요", "여보세요", "누구세요", "반갑습니다", "하이", "안녕"]
+    if any(keyword in current_message_content for keyword in greeting_keywords) and len(current_message_content) < 20: 
+         # 인사이면서 길이가 짧으면 무시 (긴 문장 속에 인사가 들어간 경우는 허용)
+        return {"status": "ignored", "reason": "greeting_message"}
+
+    # [Rule 4] 대화 길이 2턴 이상 (기존 1 -> 2 상향 조정)
+    # 초반 탐색 단계에서의 불필요한 분석 방지
+    if event.history_length < 2: 
         return {"status": "ignored", "reason": "not_enough_history"}
+        
+    # [Rule 5] 의미 있는 대화 흐름 확인 (최근 2턴 내에 10글자 이상 발화가 하나라도 있어야 함)
+    recent_turns = event.recent_history[-2:] if event.recent_history else []
+    has_meaningful_turn = any(len(msg.get("content", "")) >= 10 for msg in recent_turns)
+    
+    if not has_meaningful_turn and len(current_message_content) < 10:
+         return {"status": "ignored", "reason": "no_meaningful_context"}
 
     # 2. 분석 실행 (Background Task로 돌려도 되지만, 여기선 async로 바로 실행)
     try:
