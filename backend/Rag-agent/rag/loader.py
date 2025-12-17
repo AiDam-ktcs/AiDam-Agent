@@ -15,7 +15,7 @@ load_dotenv()
 class PDFRAGLoader:
     """PDF 파일을 로드하고 벡터 스토어를 구축하는 클래스"""
     
-    def __init__(self, pdf_path: str = "./내부_상담_메뉴얼.pdf"):
+    def __init__(self, pdf_path: str = "docs/consultation_manual.pdf"):
         self.pdf_path = pdf_path
         self.vector_store = None
         self.embeddings = None

@@ -52,12 +52,9 @@ async def startup_event():
         print("=" * 50)
         
         # PDF 로더 초기화
-        # 프로젝트 루트 기준으로 PDF 경로 설정
-        current_dir = os.getcwd()
-        if os.path.basename(current_dir) == "backend":
-            pdf_path = "../내부_상담_메뉴얼.pdf"
-        else:
-            pdf_path = "./내부_상담_메뉴얼.pdf"
+        # Rag-agent 디렉토리 기준으로 PDF 경로 설정
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        pdf_path = os.path.join(script_dir, "docs", "consultation_manual.pdf")
         pdf_loader = PDFRAGLoader(pdf_path=pdf_path)
         pdf_loader.load_and_index()
         

@@ -13,7 +13,7 @@ RAG (Retrieval-Augmented Generation) 기반으로 내부 상담 매뉴얼을 참
 
 - Python 3.8+
 - OpenAI API 키
-- `내부_상담_메뉴얼.pdf` 파일 (프로젝트 루트에 위치)
+- `docs/consultation_manual.pdf` 파일 (Rag-agent/docs 폴더에 위치)
 
 ## 🚀 실행 방법
 
@@ -153,7 +153,7 @@ pwd
 cd ../../..
 
 # PDF 파일 확인
-ls -la 내부_상담_메뉴얼.pdf
+ls -la docs/consultation_manual.pdf
 ```
 
 ### OpenAI API 키 오류
