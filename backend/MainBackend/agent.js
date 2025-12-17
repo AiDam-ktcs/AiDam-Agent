@@ -172,7 +172,7 @@ app.post('/api/stt/call-start', (req, res) => {
  * POST /api/stt/line
  * Receive STT Line
  */
-app.post('/api/stt/line', (req, res) => {
+app.post('/api/stt/line', async (req, res) => {
   const { callId, speaker, text, keywords } = req.body;
 
   if (!ACTIVE_CALL) {
@@ -283,7 +283,12 @@ app.post('/call/outbound', (req, res) => {
 app.get('/active-call', (req, res) => {
   res.json({
     active: !!ACTIVE_CALL,
-    call: ACTIVE_CALL
+    call: ACTIVE_CALL ? {
+      ...ACTIVE_CALL,
+      // Agent 결과 포함
+      ragResults: ACTIVE_CALL.ragResults || [],
+      latestIntent: ACTIVE_CALL.latestIntent || null
+    } : null
   });
 });
 
@@ -377,10 +382,99 @@ app.post('/call/end', (req, res) => {
 // 서버 포트
 const PORT = process.env.PORT || 3000;
 
+// Agent 자동 호출 설정
+const AUTO_RAG_ENABLED = process.env.AUTO_RAG_ENABLED !== 'false'; // 기본 활성화
+const AUTO_UPSELL_ENABLED = process.env.AUTO_UPSELL_ENABLED !== 'false';
+const UPSELL_TRIGGER_INTERVAL = parseInt(process.env.UPSELL_TRIGGER_INTERVAL || '3'); // N개 메시지마다
+
 // Reports storage directory
 const REPORTS_DIR = path.join(__dirname, 'reports');
 if (!fs.existsSync(REPORTS_DIR)) {
   fs.mkdirSync(REPORTS_DIR, { recursive: true });
+}
+
+/**
+ * 키워드 기반 RAG 자동 검색
+ */
+async function autoSearchRAG(keywords) {
+  if (!AUTO_RAG_ENABLED || !keywords || keywords.length === 0) {
+    return null;
+  }
+
+  const ragAgent = agentsConfig.getAgent('rag');
+  if (!ragAgent || !ragAgent.enabled) {
+    return null;
+  }
+
+  try {
+    // 키워드를 쿼리로 결합
+    const query = keywords.join(' ');
+    const url = agentsConfig.buildUrl('rag', 'search');
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, k: 3 }),
+      timeout: 5000
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      console.log(`[AutoRAG] Found ${result.sources?.length || 0} relevant manual sections for: ${query}`);
+      return result.sources;
+    }
+  } catch (error) {
+    console.error(`[AutoRAG] Error: ${error.message}`);
+  }
+
+  return null;
+}
+
+/**
+ * 대화 기반 자동 업셀링 분석
+ */
+async function autoAnalyzeIntent(messages, customerInfo) {
+  if (!AUTO_UPSELL_ENABLED || !messages || messages.length === 0) {
+    return null;
+  }
+
+  // N개 메시지마다만 실행 (과부하 방지)
+  if (messages.length % UPSELL_TRIGGER_INTERVAL !== 0) {
+    return null;
+  }
+
+  const upsellAgent = agentsConfig.getAgent('upsell');
+  if (!upsellAgent || !upsellAgent.enabled) {
+    return null;
+  }
+
+  try {
+    const url = agentsConfig.buildUrl('upsell', 'intentOnly');
+
+    // 최근 10개 메시지만 전송 (성능 최적화)
+    const recentMessages = messages.slice(-10);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversation_history: recentMessages,
+        current_plan_name: customerInfo?.['요금제'] || 'Unknown',
+        current_plan_fee: 35000 // TODO: 실제 요금 매핑
+      }),
+      timeout: 8000
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      console.log(`[AutoUpsell] Intent: ${result.customer_intent} (confidence: ${result.intent_confidence})`);
+      return result;
+    }
+  } catch (error) {
+    console.error(`[AutoUpsell] Error: ${error.message}`);
+  }
+
+  return null;
 }
 
 /**
