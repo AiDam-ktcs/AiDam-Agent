@@ -190,7 +190,7 @@ async def generate_script_endpoint(request: ScriptRequest):
     if intent_analyzer is None:
         raise HTTPException(status_code=503, detail="Not initialized")
     
-    script = intent_analyzer.generate_script(
+    script = await intent_analyzer.generate_script(
         conversation_history=request.conversation_history,
         current_plan=request.current_plan.model_dump(),
         target_plan=request.target_plan.model_dump(),
@@ -274,7 +274,7 @@ async def analyze_conversation(request: AnalyzeRequest):
                         current_plan["plan_tier"] = "basic"
         
         # 분석 실행
-        result = intent_analyzer.invoke(
+        result = await intent_analyzer.ainvoke(
             conversation_history=request.conversation_history,
             current_plan=current_plan,
             rag_suggestion=request.rag_suggestion,
@@ -346,7 +346,7 @@ async def quick_analyze(request: QuickAnalyzeRequest):
                  current_plan["monthly_fee"] = billing or request.current_plan_fee
         
         # 분석 실행
-        result = intent_analyzer.invoke(
+        result = await intent_analyzer.ainvoke(
             conversation_history=request.conversation_history,
             current_plan=current_plan,
             customer_info=customer_info
@@ -404,7 +404,7 @@ async def analyze_intent_only(request: QuickAnalyzeRequest):
                  current_plan["monthly_fee"] = billing or request.current_plan_fee
         
         # 분석 실행
-        result = intent_analyzer.invoke(
+        result = await intent_analyzer.ainvoke(
             conversation_history=request.conversation_history,
             current_plan=current_plan
         )
@@ -499,9 +499,8 @@ async def on_message_event(event: MessageEvent):
         }
 
         # Intent Analyzer 호출
-        # 전체 히스토리가 아니라 recent_history만 사용해도 충분한지 확인 필요
         # 하지만 Graph는 10개 정도면 충분하도록 설계됨
-        result = intent_analyzer.invoke(
+        result = await intent_analyzer.ainvoke(
             conversation_history=event.recent_history,
             current_plan=current_plan,
             customer_info=customer_info
