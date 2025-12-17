@@ -61,12 +61,12 @@ export default function RAGAssistant({ messages: conversationMessages }) {
         return
       }
 
-      // GENERATE된 경우: 정상적으로 스크립트 표시
+      // GENERATE된 경우: 정상적으로 스크립트 표시 (중복 페이지 제거, 최대 2개)
       const newScript = {
         id: Date.now(),
         title: query,
         content: response.data.answer,
-        sources: response.data.sources || [],
+        sources: deduplicateSources(response.data.sources || [], 2),
         reason: response.data.reason  // 생성 이유 저장 (옵션)
       }
       
@@ -120,6 +120,25 @@ export default function RAGAssistant({ messages: conversationMessages }) {
     }))
   }
 
+  // 중복 페이지 제거 및 최대 2개만 반환하는 헬퍼 함수
+  const deduplicateSources = (sources, maxCount = 2) => {
+    if (!sources || sources.length === 0) return []
+    
+    const seenPages = new Set()
+    const uniqueSources = []
+    
+    for (const source of sources) {
+      const pageKey = source.page || source.content?.substring(0, 50) // 페이지 번호 또는 내용 일부로 중복 체크
+      if (!seenPages.has(pageKey)) {
+        seenPages.add(pageKey)
+        uniqueSources.push(source)
+        if (uniqueSources.length >= maxCount) break
+      }
+    }
+    
+    return uniqueSources
+  }
+
   // 키워드 클릭 시 매뉴얼만 검색
   const handleKeywordClick = async (keyword) => {
     if (loading) return
@@ -133,14 +152,15 @@ export default function RAGAssistant({ messages: conversationMessages }) {
         k: 2 // 가장 관련도 높은 1~2개 매뉴얼만 가져오기
       })
 
-      // 매뉴얼 검색 결과를 스크립트로 표시
+      // 매뉴얼 검색 결과를 스크립트로 표시 (중복 페이지 제거, 최대 2개)
+      const uniqueSources = deduplicateSources(response.data.sources || [], 2)
       const manualScript = {
         id: Date.now(),
         title: `📖 "${keyword}" 관련 매뉴얼`,
-        content: response.data.sources?.map((s, idx) => 
+        content: uniqueSources.map((s, idx) => 
           `[매뉴얼 ${s.page && s.page !== 'N/A' ? `p.${s.page}` : idx + 1}]\n${s.content}`
         ).join('\n\n') || '매뉴얼을 찾을 수 없습니다.',
-        sources: response.data.sources || [],
+        sources: uniqueSources,
         isManual: true
       }
       setScripts(prev => [...prev, manualScript])
