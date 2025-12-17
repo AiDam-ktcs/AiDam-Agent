@@ -1,22 +1,26 @@
-[
-  {
-    "role": "user",
-    "content": "인터넷이 안돼요. 빨리 좀 해주세요!"
-  },
-  {
-    "role": "assistant",
-    "content": "고객님, 불편을 드려 죄송합니다. 먼저 공유기 재부팅을 한 번 해보시겠어요?"
-  },
-  {
-    "role": "user",
-    "content": "그런 거 다 해봤어요. 계속 안 되는데요?"
-  },
-  {
-    "role": "assistant",
-    "content": "확인해보니 해당 지역에 일시적인 장애가 있었습니다. 현재 복구 완료되었으니 다시 확인 부탁드립니다."
-  },
-  {
-    "role": "user",
-    "content": "아 됩니다. 감사합니다."
-  }
-]
+{
+  "phoneNumber": "010-9093-7189",
+  "topic": "Internet Trouble",
+  "messages": [
+    {
+      "role": "user",
+      "content": "인터넷이 안돼요. 빨리 좀 해주세요!"
+    },
+    {
+      "role": "assistant",
+      "content": "고객님, 불편을 드려 죄송합니다. 먼저 공유기 재부팅을 한 번 해보시겠어요?"
+    },
+    {
+      "role": "user",
+      "content": "그런 거 다 해봤어요. 계속 안 되는데요?"
+    },
+    {
+      "role": "assistant",
+      "content": "확인해보니 해당 지역에 일시적인 장애가 있었습니다. 현재 복구 완료되었으니 다시 확인 부탁드립니다."
+    },
+    {
+      "role": "user",
+      "content": "아 됩니다. 감사합니다."
+    }
+  ]
+}

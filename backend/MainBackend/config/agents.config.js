@@ -19,11 +19,11 @@ module.exports = {
       }
     },
     stt: {
-      name: 'STT Agent',
-      url: process.env.STT_AGENT_URL || 'http://localhost:8002',
-      enabled: false, // 향후 추가
-      description: '실시간 음성→텍스트 변환',
-      timeout: 30000,
+      name: 'STT Module (Temp)',
+      url: process.env.STT_AGENT_URL || 'http://localhost:8080',
+      enabled: true,
+      description: '실시간 음성→텍스트 변환 (Mock Server)',
+      timeout: 5000,
       endpoints: {
         health: '/health',
         transcribe: '/transcribe',
@@ -81,12 +81,12 @@ module.exports = {
     if (!agent) {
       throw new Error(`Unknown agent: ${agentKey}`);
     }
-    
+
     const endpointPath = agent.endpoints[endpoint];
     if (!endpointPath) {
       throw new Error(`Unknown endpoint: ${endpoint} for agent: ${agentKey}`);
     }
-    
+
     return `${agent.url}${endpointPath}`;
   }
 };

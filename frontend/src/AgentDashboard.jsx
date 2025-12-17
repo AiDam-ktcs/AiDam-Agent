@@ -27,35 +27,52 @@ export default function AgentDashboard() {
   // 고객 정보 (Backend Integration)
   const [customerInfo, setCustomerInfo] = useState(null)
 
-  // Call Status Polling
-  useEffect(() => {
-    const pollCallStatus = async () => {
-      try {
-        const resp = await fetch(`${API_URL}/active-call`)
-        const data = await resp.json()
-        if (data.active && data.call) {
-          setCallStatus('active')
-          setCustomerInfo({
-            name: data.call.customer['이름'] || 'Unknown',
-            phone: data.call.customer['번호'],
-            plan: data.call.customer['요금제'] || 'Unknown',
-            age: data.call.customer['나이'],
-            usage: {
-              prev: data.call.customer['전월 데이터'],
-              curr: data.call.customer['현월 데이터']
-            }
-          })
-          setCurrentPhoneNumber(data.call.customer['번호'])
-        } else if (callStatus === 'active') { // Call ended externally
-          // Optional: Handle external call end
+  // Call Status Polling Function
+  const pollCallStatus = async () => {
+    try {
+      const resp = await fetch(`${API_URL}/active-call`)
+      const data = await resp.json()
+      if (data.active && data.call) {
+        setCallStatus('active')
+        setCustomerInfo({
+          name: data.call.customer['이름'] || 'Unknown',
+          phone: data.call.customer['번호'],
+          plan: data.call.customer['요금제'] || 'Unknown',
+          age: data.call.customer['나이'],
+          usage: {
+            prev: data.call.customer['전월 데이터'],
+            curr: data.call.customer['현월 데이터']
+          }
+        })
+        setCurrentPhoneNumber(data.call.customer['번호'])
+        if (view === 'main' && data.call.messages) {
+          setMessages(data.call.messages.map(m => ({
+            role: m.role,
+            content: m.content,
+            keywords: m.keywords
+          })))
         }
-      } catch (err) {
-        console.error('Failed to poll call status:', err)
+      } else if (callStatus === 'active') { // Call ended externally
+        setCallStatus('ended')
+        // Auto-navigate to Report Tab
+        setRightPanelTab('report')
       }
+    } catch (err) {
+      console.error('Failed to poll call status:', err)
     }
+  }
 
+  // Polling Effect
+  useEffect(() => {
     const interval = setInterval(pollCallStatus, 2000)
     return () => clearInterval(interval)
+  }, [callStatus])
+
+  // Auto-navigate Effect when manually ending call
+  useEffect(() => {
+    if (callStatus === 'ended') {
+      setRightPanelTab('report')
+    }
   }, [callStatus])
 
   // 추천 요금제 (AI가 분석해서 제공)
@@ -87,9 +104,6 @@ export default function AgentDashboard() {
 
   useEffect(() => {
     loadReports()
-    if (reports.length > 0 && !selectedReportId) {
-      viewReport(reports[0].id)
-    }
   }, [])
 
   // 대화가 업데이트될 때마다 의중 분석 (User 메시지인 경우)
@@ -142,13 +156,14 @@ export default function AgentDashboard() {
       }
 
       // 상태 업데이트
-      setCustomerIntent(data.intent_description || data.customer_intent)
+      setCustomerIntent(data.customer_intent)
 
       // 추천 요금제 매핑
       const plans = (data.recommended_plans || []).map((plan, idx) => ({
         id: idx,
         name: plan.plan_name,
         price: plan.monthly_fee.toLocaleString(),
+        rawPrice: plan.monthly_fee,
         data: plan.data_limit,
         selected: false
       }))
@@ -202,18 +217,80 @@ export default function AgentDashboard() {
     return msgs
   }
 
-  const loadSampleConversation = async (sampleId) => {
+  const handleEndCall = async () => {
     try {
-      const resp = await fetch(`/sample-conversations/conversation${sampleId}.json`)
-      const data = await resp.json()
-      setMessages(data)
-      setCurrentReport(null)
-      setView('main')
+      await fetch(`${API_URL}/call/end`, { method: 'POST' })
+      setCallStatus('ended')
     } catch (err) {
-      console.error('Failed to load sample:', err)
-      alert('샘플 대화를 불러오는데 실패했습니다.')
+      console.error('Failed to end call:', err)
     }
   }
+
+  /* Simulation Logic */
+  const [isSimulating, setIsSimulating] = useState(false)
+  const [simulationMenuOpen, setSimulationMenuOpen] = useState(false)
+
+  const simulateConversation = async (sampleId) => {
+    setSimulationMenuOpen(false)
+    setIsSimulating(true)
+
+    try {
+      // 1. Load Sample Data via Frontend fetch (client-side)
+      const resp = await fetch(`/sample-conversations/conversation${sampleId}.json`)
+      let sampleData = await resp.json()
+
+      // Support both Array (legacy) and Object (new) formats
+      let sampleMessages = []
+      let phone = '010-1234-5678' // Default fallback
+
+      if (Array.isArray(sampleData)) {
+        sampleMessages = sampleData
+      } else {
+        sampleMessages = sampleData.messages
+        if (sampleData.phoneNumber) phone = sampleData.phoneNumber
+      }
+
+      // 2. Start Call via API
+      const startResp = await fetch(`${API_URL}/api/stt/call-start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          callId: `sim-${Date.now()}`,
+          phoneNumber: phone
+        })
+      })
+
+      if (!startResp.ok) throw new Error('Call start failed')
+
+      // Refresh UI immediately to show Customer Info
+      await pollCallStatus()
+
+      // 3. Send Lines Sequentially
+      for (const msg of sampleMessages) {
+        // Delay 1 second for simulation effect
+        await new Promise(r => setTimeout(r, 1000))
+
+        const response = await fetch(`${API_URL}/api/stt/line`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callId: 'current', // Backend handles current active call
+            speaker: msg.role === 'user' ? 'customer' : 'agent',
+            text: msg.content,
+            keywords: [] // Sample JSON might not have keywords, or we extract them here
+          })
+        })
+      }
+
+    } catch (err) {
+      console.error('Simulation failed:', err)
+      alert(`시뮬레이션 중 오류가 발생했습니다: ${err.message}`)
+    } finally {
+      setIsSimulating(false)
+    }
+  }
+
+  // const loadSampleConversation = ... (Removed in favor of simulateConversation)
 
   const showSampleList = () => {
     setView('samples')
@@ -407,38 +484,9 @@ export default function AgentDashboard() {
     link.click()
   }
 
-  const handleEndCall = async () => {
-    try {
-      await fetch(`${API_URL}/call/end`, { method: 'POST' })
-      setCallStatus('ended')
-      setCustomerInfo(null)
-      setMessages([])
-      setCurrentReport(null)
-    } catch (err) {
-      console.error('Failed to end call:', err)
-    }
-  }
-
-  // Incoming Call Simulation (Dev Tool)
-  const simulateIncomingCall = async () => {
-    const phoneNumber = prompt('전화번호를 입력하세요 (예: 010-9093-7189):', '010-9093-7189')
-    if (!phoneNumber) return
-
-    try {
-      const resp = await fetch(`${API_URL}/stt/incoming-call`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone_number: phoneNumber })
-      })
-      const data = await resp.json()
-      if (data.success) {
-        setCallStatus('ringing')
-        // Automatically answer for demo purposes after 1.5s
-        setTimeout(() => setCallStatus('active'), 1500)
-      }
-    } catch (err) {
-      alert('오류 발생: ' + err.message)
-    }
+  // Incoming Call Simulation (Dev Tool) - Now opens menu
+  const toggleSimulationMenu = () => {
+    setSimulationMenuOpen(!simulationMenuOpen)
   }
 
   // 요금제 선택 핸들러
@@ -457,18 +505,33 @@ export default function AgentDashboard() {
     setPlanScript('')
 
     try {
-      // 현재 대화 맥락을 포함한 스크립트 생성 요청
-      const response = await fetch(`${API_URL}/rag/chat`, {
+      // 현재 대화 맥락을 포함한 스크립트 생성 요청 (Upsell Agent)
+      const response = await fetch(`${UPSELL_AGENT_URL}/generate-script`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: `고객에게 "${selectedPlan.name}" 요금제(월 ${selectedPlan.price}원, ${selectedPlan.data})를 추천하는 스크립트를 작성해주세요. 현재 대화 맥락을 고려해서 자연스럽게 제안하는 멘트를 만들어주세요.`,
-          history: messages.map(m => ({ role: m.role, content: m.content }))
+          conversation_history: messages.map(m => ({ role: m.role, content: m.content })),
+          current_plan: {
+            plan_name: customerInfo?.plan || 'Unknown',
+            monthly_fee: 0,
+            data_limit: 'Unknown',
+            call_limit: '무제한',
+            plan_tier: 'standard'
+          },
+          target_plan: {
+            plan_name: selectedPlan.name,
+            monthly_fee: selectedPlan.rawPrice || parseInt(selectedPlan.price.replace(/,/g, '') || '0'),
+            data_limit: selectedPlan.data,
+            call_limit: '무제한',
+            plan_tier: 'standard'
+          },
+          customer_intent: 'neutral',
+          intent_description: customerIntent
         })
       })
 
       const data = await response.json()
-      setPlanScript(data.answer || '스크립트를 생성할 수 없습니다.')
+      setPlanScript(data.script || '스크립트를 생성할 수 없습니다.')
     } catch (error) {
       console.error('Script generation error:', error)
       setPlanScript(`고객님, 현재 사용량을 분석해본 결과 "${selectedPlan.name}" 요금제가 가장 적합해 보입니다. 월 ${selectedPlan.price}원에 ${selectedPlan.data}가 제공되어 현재보다 더 합리적으로 이용하실 수 있습니다. 변경을 도와드릴까요?`)
@@ -494,6 +557,7 @@ export default function AgentDashboard() {
         <div className="header-left">
           <h1 className="app-title">AiDam</h1>
           <div className="header-divider"></div>
+
           <button
             className="end-call-btn"
             onClick={handleEndCall}
@@ -502,18 +566,99 @@ export default function AgentDashboard() {
             <span className="material-icons-outlined">call_end</span>
             <span>End Call</span>
           </button>
+
           {/* Dev Tool: Simulate Call */}
-          <button
-            className="sim-call-btn"
-            onClick={simulateIncomingCall}
-            style={{ marginLeft: '10px', padding: '5px 10px', background: '#444', border: 'none', color: '#fff', borderRadius: '4px', cursor: 'pointer' }}
-          >
-            <span className="material-icons-outlined" style={{ fontSize: '16px', verticalAlign: 'middle', marginRight: '4px' }}>ring_volume</span>
-            Simulate Call
-          </button>
+          <div style={{ position: 'relative', display: 'inline-block' }}>
+            {/* ... keeping simulation button ... */}
+            <button
+              className="sim-call-btn"
+              onClick={toggleSimulationMenu}
+              style={{
+                marginLeft: '10px',
+                padding: '0.5rem 1rem',
+                background: isSimulating ? '#eab308' : '#444',
+                border: 'none',
+                color: '#fff',
+                borderRadius: '0.5rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.5rem',
+                fontSize: '0.875rem',
+                fontWeight: '500'
+              }}
+            >
+              <span className="material-icons-outlined" style={{ fontSize: '16px', verticalAlign: 'middle', marginRight: '4px' }}>
+                {isSimulating ? 'autorenew' : 'smart_toy'}
+              </span>
+              {isSimulating ? 'Simulating...' : 'Simulate Call'}
+            </button>
+            {/* ... keeping simulation menu ... */}
+            {simulationMenuOpen && (
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                left: '10px',
+                marginTop: '5px',
+                background: 'white',
+                border: '1px solid #ddd',
+                borderRadius: '8px',
+                boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
+                zIndex: 1000,
+                width: '240px',
+                maxHeight: '400px',
+                overflowY: 'auto'
+              }}>
+                <div style={{ padding: '10px', borderBottom: '1px solid #eee', fontWeight: 'bold', fontSize: '14px' }}>
+                  샘플 대화 선택
+                </div>
+                {sampleList.map(sample => (
+                  <button
+                    key={sample.id}
+                    onClick={() => simulateConversation(sample.id)}
+                    style={{
+                      display: 'flex',
+                      width: '100%',
+                      padding: '10px',
+                      border: 'none',
+                      background: 'transparent',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      borderBottom: '1px solid #f5f5f5'
+                    }}
+                    onMouseEnter={e => e.target.style.background = '#f9fafb'}
+                    onMouseLeave={e => e.target.style.background = 'transparent'}
+                  >
+                    {sample.id + 1}. {sample.title}
+                  </button>
+                ))}
+                <div style={{ padding: '5px', borderTop: '1px solid #eee' }}>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '10px',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      color: '#555'
+                    }}
+                    onMouseEnter={e => e.target.style.background = '#f9fafb'}
+                    onMouseLeave={e => e.target.style.background = 'transparent'}
+                  >
+                    <span className="material-icons-outlined" style={{ fontSize: '16px', marginRight: '8px' }}>folder_open</span>
+                    파일에서 불러오기
+                    <input type="file" accept=".txt,.json" onChange={handleFileUpload} hidden />
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="header-center">
+          {/* ... keeping center components ... */}
           <div className="recording-status">
             <span className="recording-dot"></span>
             <span className="recording-text">Recording...</span>
@@ -570,7 +715,7 @@ export default function AgentDashboard() {
             히스토리 (전체)
           </button>
         </div>
-      </header>
+      </header >
 
       <main className="agent-main">
         {view === 'main' && (
@@ -647,17 +792,11 @@ export default function AgentDashboard() {
                 {messages.length === 0 ? (
                   <div className="empty-conversation">
                     <span className="material-icons-outlined empty-icon">chat_bubble_outline</span>
-                    <p>상담 대화가 표시됩니다</p>
+                    <p>아직 통화 내용이 없습니다</p>
                     <div className="empty-actions">
-                      <button onClick={showSampleList} className="action-btn primary">
-                        <span className="material-icons-outlined">description</span>
-                        샘플 대화 불러오기
-                      </button>
-                      <label className="action-btn secondary">
-                        <span className="material-icons-outlined">folder_open</span>
-                        파일에서 불러오기
-                        <input type="file" accept=".txt,.json" onChange={handleFileUpload} hidden />
-                      </label>
+                      <div className="simulation-hint" style={{ color: '#aaa', fontSize: '0.9em' }}>
+                        상단 "Simulate Call" 버튼을 눌러 시뮬레이션을 시작하세요.
+                      </div>
                     </div>
                   </div>
                 ) : (
@@ -671,7 +810,7 @@ export default function AgentDashboard() {
                         </div>
                         <div className="bubble-content">
                           <span className="bubble-author">
-                            {msg.role === 'user' ? '고객' : '상담사 (AI)'}
+                            {msg.role === 'user' ? '고객' : '상담사'}
                           </span>
                           <div
                             className="bubble-text"
@@ -705,7 +844,7 @@ export default function AgentDashboard() {
                   고객 분석
                 </button>
                 <button
-                  className={`tab-btn ${rightPanelTab === 'report' ? 'active' : ''}`}
+                  className={`tab-btn ${rightPanelTab === 'report' ? 'active' : ''} ${callStatus === 'ended' ? 'shimmer-highlight' : ''}`}
                   onClick={() => setRightPanelTab('report')}
                 >
                   상담 보고서
@@ -747,6 +886,21 @@ export default function AgentDashboard() {
                   <div className="info-card plans-card">
                     <h2>추천 요금제</h2>
                     <p className="plans-subtitle">고객에게 제안할 요금제:</p>
+
+                    {/* Current Plan Display (Top of list, Read-only) - Improved Design */}
+                    {customerInfo && customerInfo.plan && (
+                      <div className="current-plan-display-v2">
+                        <div className="current-label">현재 이용중</div>
+                        <div className="current-plan-row">
+                          <div className="current-plan-info">
+                            <span className="current-plan-name">{customerInfo.plan}</span>
+                            <span className="current-plan-price">{customerInfo.billing?.toLocaleString() || '35,000'}원</span>
+                          </div>
+                          <div className="current-plan-badge">사용중</div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="plans-list">
                       {recommendedPlans.length === 0 ? (
                         <div className="empty-plans">
@@ -760,7 +914,21 @@ export default function AgentDashboard() {
                             onClick={() => handlePlanSelect(plan.id)}
                           >
                             <h4 className={plan.selected ? 'plan-name-selected' : ''}>{plan.name}</h4>
-                            <p className="plan-detail">월 {plan.price}원, {plan.data}</p>
+                            <div className="plan-detail-row">
+                              <span className="plan-price">월 {plan.price}원</span>
+                              <span className="plan-data">{plan.data}</span>
+                            </div>
+                            {customerInfo && (
+                              <div className="price-diff-badge">
+                                {(() => {
+                                  const currentPrice = customerInfo.billing || 35000;
+                                  const diff = plan.rawPrice - currentPrice;
+                                  if (diff > 0) return <span className="diff-plus">+{diff.toLocaleString()}원</span>;
+                                  if (diff < 0) return <span className="diff-minus">{diff.toLocaleString()}원</span>;
+                                  return <span className="diff-zero">동일 요금</span>;
+                                })()}
+                              </div>
+                            )}
                           </div>
                         ))
                       )}
@@ -836,7 +1004,7 @@ export default function AgentDashboard() {
                         "보고서 생성" 버튼을 클릭하세요.
                       </p>
                       {messages.length > 0 && (
-                        <button onClick={handleProcess} className="generate-report-btn">
+                        <button onClick={handleProcess} className={`generate-report-btn ${callStatus === 'ended' ? 'shimmer-highlight' : ''}`}>
                           <span className="material-icons-outlined">summarize</span>
                           보고서 생성
                         </button>
@@ -889,217 +1057,224 @@ export default function AgentDashboard() {
               )}
             </aside>
           </div>
-        )}
+        )
+        }
 
-        {view === 'history' && (
-          <div className="history-view">
-            <div className="history-header">
-              <h2>📚 보고서 히스토리</h2>
-              <button onClick={() => setView('main')} className="back-btn">
-                <span className="material-icons-outlined">arrow_back</span>
-                돌아가기
-              </button>
-            </div>
-
-            {reports.length === 0 ? (
-              <div className="empty-state">
-                <span className="material-icons-outlined empty-icon">folder_open</span>
-                <p>저장된 보고서가 없습니다</p>
-              </div>
-            ) : (
-              <div className="report-list">
-                {reports.map(report => (
-                  <div key={report.id} className="report-item">
-                    <div className="report-header-row">
-                      <div className="report-info">
-                        <h3>{report.id}</h3>
-                        <span className="report-date">{new Date(report.timestamp).toLocaleString('ko-KR')}</span>
-                      </div>
-                      <div className="report-actions">
-                        <button
-                          onClick={() => viewReport(report.id)}
-                          className="view-btn"
-                        >
-                          보기
-                        </button>
-                        <button
-                          onClick={(e) => deleteReport(report.id, e)}
-                          className="delete-btn"
-                        >
-                          삭제
-                        </button>
-                      </div>
-                    </div>
-                    {report.analysis && (
-                      <div className="report-preview">
-                        <span className="preview-label">주요 토픽:</span>
-                        <span className="preview-text">{report.analysis.main_topics?.join(', ')}</span>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {view === 'report_detail' && currentReport && (
-          <div className="report-detail-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#f5f7fa', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000 }}>
-            {/* Detail Header */}
-            <header className="detail-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 25px', background: '#fff', borderBottom: '1px solid #e0e0e0', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-              <div className="header-info" style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-                <button
-                  onClick={() => setView('history')}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', color: '#666', fontSize: '15px' }}
-                >
-                  <span className="material-icons-outlined" style={{ marginRight: '5px' }}>arrow_back</span>
-                  목록으로
+        {
+          view === 'history' && (
+            <div className="history-view">
+              <div className="history-header">
+                <h2>📚 보고서 히스토리</h2>
+                <button onClick={() => setView('main')} className="back-btn">
+                  <span className="material-icons-outlined">arrow_back</span>
+                  돌아가기
                 </button>
-                <div style={{ width: '1px', height: '20px', background: '#e0e0e0' }}></div>
-                <div>
-                  <h2 style={{ margin: 0, fontSize: '18px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <span>{currentReport.customer_phone ? `고객: ${currentReport.customer_phone}` : '고객 정보 없음'}</span>
-                    <span style={{ fontSize: '14px', color: '#888', fontWeight: 'normal' }}>| {new Date(currentReport.created_at).toLocaleString()}</span>
-                  </h2>
-                  <span style={{ fontSize: '12px', color: '#aaa' }}>ID: {currentReport.reportId}</span>
-                </div>
               </div>
 
-              <button
-                onClick={() => {
-                  setView('main')
-                  setMessages([])
-                  setCurrentReport(null)
-                }}
-                style={{ padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '500' }}
-              >
-                상담으로 돌아가기
-              </button>
-            </header>
-
-            {/* 3-Column Layout */}
-            <div className="detail-content" style={{ display: 'flex', flex: 1, overflow: 'hidden', gap: '2px' }}>
-
-              {/* 1. Chat Log (Left) */}
-              <section className="detail-col text-col" style={{ flex: 1, background: '#fff', borderRight: '1px solid #e0e0e0', display: 'flex', flexDirection: 'column', minWidth: '350px' }}>
-                <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
-                  <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>chat</span>
-                  상담 대화 내용
+              {reports.length === 0 ? (
+                <div className="empty-state">
+                  <span className="material-icons-outlined empty-icon">folder_open</span>
+                  <p>저장된 보고서가 없습니다</p>
                 </div>
-                <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
-                  {messages.map((msg, idx) => (
-                    <div key={idx} className={`chat-bubble ${msg.role}`} style={{ opacity: 0.9 }}>
-                      <div className="bubble-content">
-                        <span className="bubble-author">
-                          {msg.role === 'user' ? '고객' : '상담사'}
-                        </span>
-                        <div className="bubble-text">{msg.content}</div>
+              ) : (
+                <div className="report-list">
+                  {reports.map(report => (
+                    <div key={report.id} className="report-item">
+                      <div className="report-header-row">
+                        <div className="report-info">
+                          <h3>{report.id}</h3>
+                          <span className="report-date">{new Date(report.timestamp).toLocaleString('ko-KR')}</span>
+                        </div>
+                        <div className="report-actions">
+                          <button
+                            onClick={() => viewReport(report.id)}
+                            className="view-btn"
+                          >
+                            보기
+                          </button>
+                          <button
+                            onClick={(e) => deleteReport(report.id, e)}
+                            className="delete-btn"
+                          >
+                            삭제
+                          </button>
+                        </div>
                       </div>
+                      {report.analysis && (
+                        <div className="report-preview">
+                          <span className="preview-label">주요 토픽:</span>
+                          <span className="preview-text">{report.analysis.main_topics?.join(', ')}</span>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
-              </section>
-
-              {/* 2. RAG/Upsell Context (Center) */}
-              <section className="detail-col context-col" style={{ flex: 1, background: '#f8fafc', borderRight: '1px solid #e0e0e0', display: 'flex', flexDirection: 'column', minWidth: '350px' }}>
-                <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
-                  <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>psychology</span>
-                  상담 당시 AI 제안 (RAG & Upsell)
-                </div>
-                <div className="context-content" style={{ padding: '20px', overflowY: 'auto', flex: 1 }}>
-
-                  {/* Recovered Intent */}
-                  <div className="info-card intent-card" style={{ marginBottom: '20px' }}>
-                    <h3>당시 고객 의중 파악</h3>
-                    <p style={{ marginTop: '10px', color: '#333' }}>
-                      {currentReport.ui_snapshot?.customerIntent || '기록된 의중 데이터 없음'}
-                    </p>
-                  </div>
-
-                  {/* Recovered Plans */}
-                  <div className="info-card plans-card">
-                    <h3>제안된 요금제</h3>
-                    <div className="plans-list" style={{ marginTop: '15px' }}>
-                      {(currentReport.ui_snapshot?.recommendedPlans || []).length === 0 ? (
-                        <p style={{ color: '#999', fontStyle: 'italic' }}>제안된 요금제 없음</p>
-                      ) : (
-                        (currentReport.ui_snapshot?.recommendedPlans || []).map((plan, idx) => (
-                          <div
-                            key={idx}
-                            className={`plan-item ${plan.id === currentReport.ui_snapshot?.selectedPlanId ? 'selected' : ''}`}
-                            style={{
-                              border: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '2px solid #3b82f6' : '1px solid #e2e8f0',
-                              background: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#eff6ff' : '#fff'
-                            }}
-                          >
-                            <h4 style={{ color: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#1d4ed8' : '#333' }}>{plan.name}</h4>
-                            <p className="plan-detail">월 {plan.price}원, {plan.data}</p>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Recovered Script */}
-                  {currentReport.ui_snapshot?.planScript && (
-                    <div className="plan-script-box" style={{ marginTop: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                      <h4 style={{ marginBottom: '10px', fontSize: '14px', color: '#555' }}>
-                        <span className="material-icons-outlined" style={{ fontSize: '16px', verticalAlign: 'middle' }}>description</span>
-                        생성된 추천 스크립트
-                      </h4>
-                      <p style={{ lineHeight: '1.5', color: '#333' }}>{currentReport.ui_snapshot.planScript}</p>
-                    </div>
-                  )}
-
-                </div>
-              </section>
-
-              {/* 3. Report (Right) */}
-              <section className="detail-col report-col" style={{ flex: 1.2, background: '#fff', display: 'flex', flexDirection: 'column', minWidth: '400px' }}>
-                <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
-                  <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>summarize</span>
-                  최종 상담 보고서
-                </div>
-                <div className="markdown-content" style={{ padding: '30px', overflowY: 'auto', flex: 1 }}>
-                  {/* Re-use ReactMarkdown */}
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {currentReport.report}
-                  </ReactMarkdown>
-                </div>
-              </section>
-
+              )}
             </div>
-          </div>
-        )}
+          )
+        }
 
-        {view === 'samples' && (
-          <div className="samples-view">
-            <div className="samples-header">
-              <h2>샘플 대화 목록</h2>
-              <button onClick={() => setView('main')} className="back-btn">
-                <span className="material-icons-outlined">arrow_back</span>
-                돌아가기
-              </button>
-            </div>
+        {
+          view === 'report_detail' && currentReport && (
+            <div className="report-detail-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#f5f7fa', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000 }}>
+              {/* Detail Header */}
+              <header className="detail-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 25px', background: '#fff', borderBottom: '1px solid #e0e0e0', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                <div className="header-info" style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                  <button
+                    onClick={() => setView('history')}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', color: '#666', fontSize: '15px' }}
+                  >
+                    <span className="material-icons-outlined" style={{ marginRight: '5px' }}>arrow_back</span>
+                    목록으로
+                  </button>
+                  <div style={{ width: '1px', height: '20px', background: '#e0e0e0' }}></div>
+                  <div>
+                    <h2 style={{ margin: 0, fontSize: '18px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span>{currentReport.customer_phone ? `고객: ${currentReport.customer_phone}` : '고객 정보 없음'}</span>
+                      <span style={{ fontSize: '14px', color: '#888', fontWeight: 'normal' }}>| {new Date(currentReport.created_at).toLocaleString()}</span>
+                    </h2>
+                    <span style={{ fontSize: '12px', color: '#aaa' }}>ID: {currentReport.reportId}</span>
+                  </div>
+                </div>
 
-            <div className="sample-list">
-              {sampleList.map(sample => (
-                <div
-                  key={sample.id}
-                  className="sample-item"
-                  onClick={() => loadSampleConversation(sample.id)}
+                <button
+                  onClick={() => {
+                    setView('main')
+                    setMessages([])
+                    setCurrentReport(null)
+                  }}
+                  style={{ padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '500' }}
                 >
-                  <div className="sample-number">#{sample.id}</div>
-                  <div className="sample-info">
-                    <h3 className="sample-title">{sample.title}</h3>
+                  상담으로 돌아가기
+                </button>
+              </header>
+
+              {/* 3-Column Layout */}
+              <div className="detail-content" style={{ display: 'flex', flex: 1, overflow: 'hidden', gap: '2px' }}>
+
+                {/* 1. Chat Log (Left) */}
+                <section className="detail-col text-col" style={{ flex: 1, background: '#fff', borderRight: '1px solid #e0e0e0', display: 'flex', flexDirection: 'column', minWidth: '350px' }}>
+                  <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
+                    <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>chat</span>
+                    상담 대화 내용
                   </div>
-                  <span className="material-icons-outlined sample-arrow">arrow_forward</span>
-                </div>
-              ))}
+                  <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+                    {messages.map((msg, idx) => (
+                      <div key={idx} className={`chat-bubble ${msg.role}`} style={{ opacity: 0.9 }}>
+                        <div className="bubble-content">
+                          <span className="bubble-author">
+                            {msg.role === 'user' ? '고객' : '상담사'}
+                          </span>
+                          <div className="bubble-text">{msg.content}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                {/* 2. RAG/Upsell Context (Center) */}
+                <section className="detail-col context-col" style={{ flex: 1, background: '#f8fafc', borderRight: '1px solid #e0e0e0', display: 'flex', flexDirection: 'column', minWidth: '350px' }}>
+                  <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
+                    <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>psychology</span>
+                    상담 당시 AI 제안 (RAG & Upsell)
+                  </div>
+                  <div className="context-content" style={{ padding: '20px', overflowY: 'auto', flex: 1 }}>
+
+                    {/* Recovered Intent */}
+                    <div className="info-card intent-card" style={{ marginBottom: '20px' }}>
+                      <h3>당시 고객 의중 파악</h3>
+                      <p style={{ marginTop: '10px', color: '#333' }}>
+                        {currentReport.ui_snapshot?.customerIntent || '기록된 의중 데이터 없음'}
+                      </p>
+                    </div>
+
+                    {/* Recovered Plans */}
+                    <div className="info-card plans-card">
+                      <h3>제안된 요금제</h3>
+                      <div className="plans-list" style={{ marginTop: '15px' }}>
+                        {(currentReport.ui_snapshot?.recommendedPlans || []).length === 0 ? (
+                          <p style={{ color: '#999', fontStyle: 'italic' }}>제안된 요금제 없음</p>
+                        ) : (
+                          (currentReport.ui_snapshot?.recommendedPlans || []).map((plan, idx) => (
+                            <div
+                              key={idx}
+                              className={`plan-item ${plan.id === currentReport.ui_snapshot?.selectedPlanId ? 'selected' : ''}`}
+                              style={{
+                                border: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '2px solid #3b82f6' : '1px solid #e2e8f0',
+                                background: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#eff6ff' : '#fff'
+                              }}
+                            >
+                              <h4 style={{ color: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#1d4ed8' : '#333' }}>{plan.name}</h4>
+                              <p className="plan-detail">월 {plan.price}원, {plan.data}</p>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Recovered Script */}
+                    {currentReport.ui_snapshot?.planScript && (
+                      <div className="plan-script-box" style={{ marginTop: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                        <h4 style={{ marginBottom: '10px', fontSize: '14px', color: '#555' }}>
+                          <span className="material-icons-outlined" style={{ fontSize: '16px', verticalAlign: 'middle' }}>description</span>
+                          생성된 추천 스크립트
+                        </h4>
+                        <p style={{ lineHeight: '1.5', color: '#333' }}>{currentReport.ui_snapshot.planScript}</p>
+                      </div>
+                    )}
+
+                  </div>
+                </section>
+
+                {/* 3. Report (Right) */}
+                <section className="detail-col report-col" style={{ flex: 1.2, background: '#fff', display: 'flex', flexDirection: 'column', minWidth: '400px' }}>
+                  <div className="col-header" style={{ padding: '15px', borderBottom: '1px solid #eee', fontWeight: '600', color: '#444' }}>
+                    <span className="material-icons-outlined" style={{ verticalAlign: 'middle', marginRight: '8px', fontSize: '18px' }}>summarize</span>
+                    최종 상담 보고서
+                  </div>
+                  <div className="markdown-content" style={{ padding: '30px', overflowY: 'auto', flex: 1 }}>
+                    {/* Re-use ReactMarkdown */}
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {currentReport.report}
+                    </ReactMarkdown>
+                  </div>
+                </section>
+
+              </div>
             </div>
-          </div>
-        )}
-      </main>
-    </div>
+          )
+        }
+
+        {
+          view === 'samples' && (
+            <div className="samples-view">
+              <div className="samples-header">
+                <h2>샘플 대화 목록</h2>
+                <button onClick={() => setView('main')} className="back-btn">
+                  <span className="material-icons-outlined">arrow_back</span>
+                  돌아가기
+                </button>
+              </div>
+
+              <div className="sample-list">
+                {sampleList.map(sample => (
+                  <div
+                    key={sample.id}
+                    className="sample-item"
+                    onClick={() => loadSampleConversation(sample.id)}
+                  >
+                    <div className="sample-number">#{sample.id}</div>
+                    <div className="sample-info">
+                      <h3 className="sample-title">{sample.title}</h3>
+                    </div>
+                    <span className="material-icons-outlined sample-arrow">arrow_forward</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        }
+      </main >
+    </div >
   )
 }
