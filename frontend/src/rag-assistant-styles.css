@@ -148,8 +148,8 @@
 }
 
 .script-card.highlight {
-  background: #eff6ff;
-  border-left: 4px solid var(--primary);
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
 }
 
 .script-card.error {
@@ -169,16 +169,8 @@
 .script-title {
   font-size: 1rem;
   font-weight: 600;
-  color: var(--primary);
-  margin-bottom: 0.75rem;
-}
-
-.script-card.highlight .script-title {
-  color: var(--primary);
-}
-
-.script-card:not(.highlight) .script-title {
   color: var(--text-primary);
+  margin-bottom: 0.75rem;
 }
 
 .script-content {
