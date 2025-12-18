@@ -33,7 +33,14 @@ export default function AgentDashboard() {
       const resp = await fetch(`${API_URL}/active-call`)
       const data = await resp.json()
       if (data.active && data.call) {
+        const wasInactive = callStatus === 'idle' || callStatus === 'ended'
         setCallStatus('active')
+        
+        // 새로운 통화가 시작되면 고객 분석 탭으로 전환
+        if (wasInactive) {
+          setRightPanelTab('intent')
+        }
+        
         setCustomerInfo({
           name: data.call.customer['이름'] || 'Unknown',
           phone: data.call.customer['번호'],
@@ -240,6 +247,9 @@ export default function AgentDashboard() {
 
       if (!startResp.ok) throw new Error('Call start failed')
 
+      // 새로운 통화 시작 시 고객 분석 탭으로 전환
+      setRightPanelTab('intent')
+      
       // Refresh UI immediately to show Customer Info
       await pollCallStatus()
 
