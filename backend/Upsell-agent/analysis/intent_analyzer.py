@@ -195,8 +195,8 @@ RAG 에이전트 제안 내용:
         
         return workflow.compile()
     
-    def _analyze_intent(self, state: UpsellState) -> Dict[str, Any]:
-        """고객 의중 분석"""
+    async def _analyze_intent(self, state: UpsellState) -> Dict[str, Any]:
+        """고객 의중 분석 (Async)"""
         conversation_history = state["conversation_history"]
         rag_suggestion = state.get("rag_suggestion", "")
         current_plan = state["current_plan"]
@@ -222,7 +222,8 @@ RAG 에이전트 제안 내용:
             estimated_billing=state.get("customer_info", {}).get("billing", current_plan.get("monthly_fee", 0))
         )
         
-        response = self.llm.invoke(prompt)
+        # Async 호출
+        response = await self.llm.ainvoke(prompt)
         
         try:
             # JSON 파싱
@@ -242,8 +243,8 @@ RAG 에이전트 제안 내용:
                 "sentiment_score": 0.0
             }
     
-    def _judge_upsell(self, state: UpsellState) -> Dict[str, Any]:
-        """업셀링 가능성 판단"""
+    async def _judge_upsell(self, state: UpsellState) -> Dict[str, Any]:
+        """업셀링 가능성 판단 (Async)"""
         current_plan = state["current_plan"]
         
         # 프롬프트 생성 및 LLM 호출
@@ -262,7 +263,8 @@ RAG 에이전트 제안 내용:
             estimated_billing=state.get("customer_info", {}).get("billing", current_plan.get("monthly_fee", 0))
         )
         
-        response = self.llm.invoke(prompt)
+        # Async 호출
+        response = await self.llm.ainvoke(prompt)
         
         try:
             result = json.loads(response.content)
@@ -280,8 +282,9 @@ RAG 에이전트 제안 내용:
                 "recommended_action": "고객 상황을 더 파악해주세요."
             }
     
-    def _recommend_plans(self, state: UpsellState) -> Dict[str, Any]:
-        """요금제 추천 (세그먼트 및 등급 기반)"""
+    async def _recommend_plans(self, state: UpsellState) -> Dict[str, Any]:
+        """요금제 추천 (Async Wrapper)"""
+        # 로직 자체는 동기식이지만, 그래프 노드 인터페이스 맞춤
         current_plan = state["current_plan"]
         upsell_possibility = state["upsell_possibility"]
         customer_intent = state["customer_intent"]
@@ -291,8 +294,6 @@ RAG 에이전트 제안 내용:
         
         # 1. 고객 세그먼트 결정
         segment = "general" # 기본값
-        
-        # customer_info에서 세그먼트 정보 확인
         if "segment" in customer_info and customer_info["segment"] in PLAN_DATABASE:
             segment = customer_info["segment"]
         elif "age" in customer_info:
@@ -359,24 +360,27 @@ RAG 에이전트 제안 내용:
             # 현재 요금제 제외
             recommended_plans = [p for p in recommended_plans 
                                 if p["plan_name"] != current_plan.get("plan_name")]
-        
         # 결과가 없으면 전체 목록에서 다른 것 추천
         if not recommended_plans:
              recommended_plans = [p for p in available_plans 
                                 if p["plan_name"] != current_plan.get("plan_name")]
         
         return {
-            "recommended_plans": recommended_plans[:3]  # 최대 3개
+            "recommended_plans": recommended_plans[:3]
         }
     
-    def invoke(
+    def invoke(self, *args, **kwargs):
+        """Deprecated: Use ainvoke instead"""
+        raise NotImplementedError("Use ainvoke() for async execution")
+
+    async def ainvoke(
         self, 
         conversation_history: List[Dict[str, str]],
         current_plan: Dict[str, Any],
         rag_suggestion: Optional[str] = None,
         customer_info: Optional[Dict[str, Any]] = None
     ) -> AnalysisResult:
-        """그래프 실행"""
+        """그래프 비동기 실행"""
         
         initial_state: UpsellState = {
             "conversation_history": conversation_history,
@@ -393,7 +397,8 @@ RAG 에이전트 제안 내용:
             "recommended_plans": []
         }
         
-        result = self.graph.invoke(initial_state)
+        # ainvoke 사용
+        result = await self.graph.ainvoke(initial_state)
         
         return {
             "customer_intent": result["customer_intent"],
@@ -408,7 +413,7 @@ RAG 에이전트 제안 내용:
         }
 
 
-    def generate_script(
+    async def generate_script(
         self,
         conversation_history: List[Dict[str, str]],
         current_plan: Dict[str, Any],
@@ -416,7 +421,7 @@ RAG 에이전트 제안 내용:
         customer_intent: str = "neutral",
         intent_description: str = ""
     ) -> str:
-        """추천 스크립트 생성"""
+        """추천 스크립트 생성 (Async)"""
         
         # 대화 이력 포맷팅
         history_text = "\n".join([
@@ -424,7 +429,7 @@ RAG 에이전트 제안 내용:
             for msg in conversation_history[-5:]  # 최근 5개만
         ])
         
-        # 소구점 파악 (간단한 로직)
+        # 소구점 파악
         selling_point = "더 많은 혜택"
         if target_plan.get("monthly_fee", 0) > current_plan.get("monthly_fee", 0):
             selling_point = "더 많은 데이터와 풍부한 혜택"
@@ -443,5 +448,5 @@ RAG 에이전트 제안 내용:
             selling_point=selling_point
         )
         
-        response = self.llm.invoke(prompt)
+        response = await self.llm.ainvoke(prompt)
         return response.content

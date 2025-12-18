@@ -102,6 +102,16 @@ class RAGGraph:
     
     def _analyze_context(self, state: CallState) -> Dict[str, Any]:
         """맥락 분석 (하이브리드: 규칙 + Intent + LLM fallback)"""
+        
+        # force_generate로 이미 GENERATE가 설정된 경우 분석 건너뛰기
+        if state.get("context_decision") == "GENERATE" and state.get("decision_reason") == "forced":
+            return {
+                "context_decision": "GENERATE",
+                "decision_reason": "forced",
+                "should_generate": True,
+                "importance_score": 1.0
+            }
+        
         utterance = state["recent_user_utterance"].strip()
         history = state.get("history", [])
         
@@ -144,45 +154,48 @@ class RAGGraph:
         순서: 용건/질문 먼저 체크 → 인사/감사만 있으면 SKIP
         """
         
-        # 규칙 1: 짧은 맞장구는 스킵
+        # 규칙 1: 짧은 맞장구는 스킵 (정확히 일치하는 경우만)
         short_responses = [
-            "네", "예", "음", "응", "넵", "알겠어요"
+            "네", "예", "음", "응", "넵", "아", "어"
         ]
-        if utterance in short_responses or len(utterance) < 3:
+        if utterance in short_responses or len(utterance) < 2:
             return {
                 "decision": "SKIP",
                 "reason": "simple_acknowledgment",
                 "importance": 0.0
             }
         
-        # 규칙 2: 최근 발화와 중복 체크
-        if history and len(history) > 0:
-            last_user_msg = None
-            for msg in reversed(history):
-                if msg.get("role") == "user":
-                    last_user_msg = msg.get("content", "")
-                    break
-            
-            if last_user_msg and utterance == last_user_msg:
-                return {
-                    "decision": "SKIP",
-                    "reason": "duplicate_utterance",
-                    "importance": 0.0
-                }
+        # 규칙 2: (duplicate 체크 제거됨)
         
-        # 규칙 3: 인사/감사 표현만 있으면 → SKIP
+        # 규칙 3: 용건 키워드가 있으면 → GENERATE (인사와 섞여있어도 용건 우선)
+        business_keywords = [
+            "문의", "변경", "해지", "가입", "신청", "결제", "환불", "취소",
+            "요금", "데이터", "로밍", "배송", "반품", "교환", "수리", "설치",
+            "어떻게", "왜", "언제", "뭐", "얼마", "?",
+            "안돼", "안됨", "오류", "문제", "불편"
+        ]
+        if any(kw in utterance for kw in business_keywords):
+            return {
+                "decision": "GENERATE",
+                "reason": "business_request",
+                "importance": 0.7
+            }
+        
+        # 규칙 4: 순수 인사/감사 표현만 있으면 → SKIP (용건 체크 후!)
+        # 긴 문장은 다른 내용이 있을 수 있으므로 스킵하지 않음
         greeting_patterns = [
             "감사합니다", "감사해요", "고마워요",
-            "안녕하세요", "수고하세요", "알겠습니다", "알겠어요"
+            "안녕하세요", "수고하세요"
         ]
-        if any(pattern in utterance for pattern in greeting_patterns):
+        # 짧은 인사만 스킵 (15글자 이하 + 인사 패턴)
+        if len(utterance) <= 15 and any(pattern in utterance for pattern in greeting_patterns):
             return {
                 "decision": "SKIP",
                 "reason": "greeting_only",
                 "importance": 0.0
             }
         
-        # 규칙 4: 종료 신호 감지
+        # 규칙 5: 종료 신호 감지
         end_signals = [
             "됐습니다", "됐어요", "끊을게요", "필요없어요"
         ]
@@ -245,30 +258,9 @@ class RAGGraph:
         return "기타"
     
     def _calculate_importance(self, utterance: str) -> float:
-        """중요도 계산 (0.0 ~ 1.0)"""
-        score = 0.0
-        
-        # 길이 기반 점수
-        if len(utterance) > 20:
-            score += 0.3
-        elif len(utterance) > 10:
-            score += 0.2
-        elif len(utterance) > 5:
-            score += 0.1
-        
-        # 중요 키워드 포함 여부
-        important_keywords = [
-            "문의", "요청", "필요", "어떻게", "언제",
-            "해주세요", "알려주세요", "확인", "조회"
-        ]
-        keyword_count = sum(1 for kw in important_keywords if kw in utterance)
-        score += min(keyword_count * 0.2, 0.4)
-        
-        # 질문 패턴
-        if "?" in utterance or utterance.endswith(("요?", "까?", "나요?")):
-            score += 0.3
-        
-        return min(score, 1.0)
+        """중요도 계산 (간소화 - 항상 생성)"""
+        # 중요도 검사 제거: 모든 메시지를 동등하게 처리
+        return 0.7
     
     def _llm_final_decision(self, utterance: str, history: list) -> Dict[str, Any]:
         """LLM 기반 최종 판단 (fallback, 1% 케이스)"""
@@ -376,7 +368,7 @@ class RAGGraph:
             "history": updated_history
         }
     
-    def invoke(self, user_message: str, history: list = None) -> Dict[str, Any]:
+    def invoke(self, user_message: str, history: list = None, force_generate: bool = False) -> Dict[str, Any]:
         """그래프 실행 (맥락 분석 포함)"""
         if history is None:
             history = []
@@ -393,18 +385,18 @@ class RAGGraph:
             "history": history,
             "retrieved_docs": [],
             "answer": "",
-            "context_decision": None,
+            "context_decision": "GENERATE" if force_generate else None,  # 강제 생성 시 바로 GENERATE
             "current_intent": None,
             "last_intent": last_intent,
             "importance_score": None,
-            "decision_reason": None,
-            "should_generate": None
+            "decision_reason": "forced" if force_generate else None,
+            "should_generate": True if force_generate else None
         }
         
         result = self.graph.invoke(initial_state)
         
-        # SKIP된 경우 처리
-        if result.get("context_decision") == "SKIP":
+        # SKIP된 경우 처리 (force_generate면 이 조건에 안 걸림)
+        if result.get("context_decision") == "SKIP" and not force_generate:
             # 간단한 확인 응답만 반환 (히스토리 업데이트 없음)
             return {
                 "answer": "",  # 빈 답변

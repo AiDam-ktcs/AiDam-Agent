@@ -190,7 +190,7 @@ async def generate_script_endpoint(request: ScriptRequest):
     if intent_analyzer is None:
         raise HTTPException(status_code=503, detail="Not initialized")
     
-    script = intent_analyzer.generate_script(
+    script = await intent_analyzer.generate_script(
         conversation_history=request.conversation_history,
         current_plan=request.current_plan.model_dump(),
         target_plan=request.target_plan.model_dump(),
@@ -274,7 +274,7 @@ async def analyze_conversation(request: AnalyzeRequest):
                         current_plan["plan_tier"] = "basic"
         
         # 분석 실행
-        result = intent_analyzer.invoke(
+        result = await intent_analyzer.ainvoke(
             conversation_history=request.conversation_history,
             current_plan=current_plan,
             rag_suggestion=request.rag_suggestion,
@@ -346,7 +346,7 @@ async def quick_analyze(request: QuickAnalyzeRequest):
                  current_plan["monthly_fee"] = billing or request.current_plan_fee
         
         # 분석 실행
-        result = intent_analyzer.invoke(
+        result = await intent_analyzer.ainvoke(
             conversation_history=request.conversation_history,
             current_plan=current_plan,
             customer_info=customer_info
@@ -404,7 +404,7 @@ async def analyze_intent_only(request: QuickAnalyzeRequest):
                  current_plan["monthly_fee"] = billing or request.current_plan_fee
         
         # 분석 실행
-        result = intent_analyzer.invoke(
+        result = await intent_analyzer.ainvoke(
             conversation_history=request.conversation_history,
             current_plan=current_plan
         )
@@ -437,15 +437,64 @@ async def on_message_event(event: MessageEvent):
     if intent_analyzer is None:
         return {"status": "ignored", "reason": "not_initialized"}
 
-    # 1. 분석 조건 확인 (Throttling Logic)
-    # 예: 사용자 메시지일 때만, 그리고 대화가 어느 정도 진행되었을 때
+    # 1. 분석 조건 확인 (Throttling Logic & Filtering)
+    current_message_content = event.message.get("content", "").strip()
+    message_id = event.message.get("messageId") # [NEW] Extract message ID
+
+    # Helper function to push filtered status
+    async def push_filtered_status(reason: str):
+        if not message_id:
+            return
+        
+        filtered_payload = {
+            "messageId": message_id,
+            "status": "filtered",
+            "reason": reason,
+            "customer_intent": "filtered",
+            "upsell_possibility": "filtered"
+        }
+        
+        main_backend_url = "http://localhost:3000"
+        push_url = f"{main_backend_url}/internal/upsell-result"
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(push_url, json={
+                    "callId": event.active_call_context.callId,
+                    "analysisResult": filtered_payload
+                }, timeout=3.0)
+        except Exception as e:
+            print(f"Failed to push filtered status: {e}")
+    
+    # [Rule 1] 사용자 메시지일 때만 분석
     if event.message.get("role") != "user":
         return {"status": "ignored", "reason": "not_user_message"}
     
-    # 예: 너무 초반이면 스킵 (인사말 등)
-    # [Mod for Test] 테스트를 위해 길이 제한을 완화합니다.
-    if event.history_length < 1: 
+    # [Rule 2] 너무 짧은 발화 무시 (네, 아니오 등) - 공백 제외 5글자 미만
+    if len(current_message_content) < 5:
+        await push_filtered_status("message_too_short")
+        return {"status": "ignored", "reason": "message_too_short"}
+
+    # [Rule 3] 단순 인사말 필터링
+    greeting_keywords = ["안녕하세요", "여보세요", "누구세요", "반갑습니다", "하이", "안녕"]
+    if any(keyword in current_message_content for keyword in greeting_keywords) and len(current_message_content) < 20: 
+         # 인사이면서 길이가 짧으면 무시 (긴 문장 속에 인사가 들어간 경우는 허용)
+        await push_filtered_status("greeting_message")
+        return {"status": "ignored", "reason": "greeting_message"}
+
+    # [Rule 4] 대화 길이 2턴 이상 (기존 1 -> 2 상향 조정)
+    # 초반 탐색 단계에서의 불필요한 분석 방지
+    if event.history_length < 2: 
+        await push_filtered_status("not_enough_history")
         return {"status": "ignored", "reason": "not_enough_history"}
+        
+    # [Rule 5] 의미 있는 대화 흐름 확인 (최근 2턴 내에 10글자 이상 발화가 하나라도 있어야 함)
+    recent_turns = event.recent_history[-2:] if event.recent_history else []
+    has_meaningful_turn = any(len(msg.get("content", "")) >= 10 for msg in recent_turns)
+    
+    if not has_meaningful_turn and len(current_message_content) < 10:
+        await push_filtered_status("no_meaningful_context")
+        return {"status": "ignored", "reason": "no_meaningful_context"}
 
     # 2. 분석 실행 (Background Task로 돌려도 되지만, 여기선 async로 바로 실행)
     try:
@@ -480,9 +529,8 @@ async def on_message_event(event: MessageEvent):
         }
 
         # Intent Analyzer 호출
-        # 전체 히스토리가 아니라 recent_history만 사용해도 충분한지 확인 필요
         # 하지만 Graph는 10개 정도면 충분하도록 설계됨
-        result = intent_analyzer.invoke(
+        result = await intent_analyzer.ainvoke(
             conversation_history=event.recent_history,
             current_plan=current_plan,
             customer_info=customer_info
@@ -491,8 +539,10 @@ async def on_message_event(event: MessageEvent):
         # 3. 결과 MainBackend로 전송
         # 필요한 정보만 추려서 전송
         analysis_payload = {
+            "messageId": message_id, # [NEW] Pass back message ID
             "customer_intent": result["customer_intent"],
             "intent_description": result.get("intent_description", ""),
+            "sentiment_score": result.get("sentiment_score", 0), # [NEW] Include sentiment score
             "upsell_possibility": result["upsell_possibility"],
             "upsell_reason": result.get("upsell_reason", ""),
             "reasoning_steps": result.get("reasoning_steps", []),

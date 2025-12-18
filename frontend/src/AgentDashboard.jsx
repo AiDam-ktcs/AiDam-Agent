@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import RAGAssistant from './RAGAssistant'
@@ -18,14 +18,105 @@ export default function AgentDashboard() {
   const [selectedReportId, setSelectedReportId] = useState(null)
   const [autoAnalyze, setAutoAnalyze] = useState(true)
   const [callStatus, setCallStatus] = useState('active') // 'idle', 'ringing', 'active', 'ended'
+  const [currentCallId, setCurrentCallId] = useState(null) // 현재 통화 ID (고객 변경 감지용)
   const [currentPhoneNumber, setCurrentPhoneNumber] = useState('010-1111-2222')
-  const [volume, setVolume] = useState(50)
-  const [isMuted, setIsMuted] = useState(false)
-  const [isPaused, setIsPaused] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState('intent') // 'intent', 'report'
+  const [regenerating, setRegenerating] = useState(false)
 
   // 고객 정보 (Backend Integration)
   const [customerInfo, setCustomerInfo] = useState(null)
+
+  // 고객 메시지 클릭 시 스크립트 생성 트리거
+  const [triggerMessage, setTriggerMessage] = useState(null)
+
+  // 추천 요금제 (AI가 분석해서 제공)
+  const [recommendedPlans, setRecommendedPlans] = useState([])
+
+  // AI 분석/사고 과정
+  const [aiReasoning, setAiReasoning] = useState([])
+  const [isAnalyzingIntent, setIsAnalyzingIntent] = useState(false)
+
+  // RAG Scripts State (Lifted from RAGAssistant)
+  const [ragScripts, setRagScripts] = useState([])
+  const [isRagCleared, setIsRagCleared] = useState(false) // 초기화 상태 추적
+
+  // 선택된 요금제에 대한 추천 스크립트
+  const [planScript, setPlanScript] = useState('')
+  const [scriptLoading, setScriptLoading] = useState(false)
+
+  // 고객 의중 (AI 분석 결과)
+  const [customerIntent, setCustomerIntent] = useState('대화 내용 분석 대기 중...')
+
+  // [NEW] Upsell Analysis History & Selection
+  const [upsellHistory, setUpsellHistory] = useState({}); // { messageId: AnalysisResult }
+  const [selectedAnalysisId, setSelectedAnalysisId] = useState(null);
+  const [analyzingMessages, setAnalyzingMessages] = useState(new Set()); // [NEW] Track messages being analyzed
+
+  const [sampleList] = useState([
+    { id: 0, title: '인터넷 장애 - 긴급 문의' },
+    { id: 1, title: '통화품질 불량 - 유심 교체' },
+    { id: 2, title: '요금제 변경 - 데이터 절약' },
+    { id: 3, title: '청구서 이상 - 부가서비스 항의' },
+    { id: 4, title: '기기 변경 - 아이폰 구매' },
+    { id: 5, title: '데이터 차단 - 추가 구매' },
+    { id: 6, title: '해외 로밍 - 일본 여행' },
+    { id: 7, title: '명의 도용 오해 - 미납 발견' },
+    { id: 8, title: '5G 커버리지 불만' },
+    { id: 9, title: '어르신 요금제 - 효도 상담' }
+  ])
+
+  // [NEW] Helper to update Right Panel State
+  const updateRightPanel = (result) => {
+    // Update Intent logic
+    if (result.customer_intent) {
+      setCustomerIntent(result.customer_intent);
+    }
+
+    // Update Reasoning logic
+    if (result.reasoning_steps && result.reasoning_steps.length > 0) {
+      setAiReasoning(result.reasoning_steps);
+    } else if (result.upsell_reason) {
+      setAiReasoning([result.upsell_reason]);
+    } else if (result.intent_description) {
+      setAiReasoning([result.intent_description]);
+    }
+
+    // Update Recommended Plans logic
+    if (result.recommended_plans && result.recommended_plans.length > 0) {
+      const plans = result.recommended_plans.map((plan, idx) => ({
+        id: idx,
+        name: plan.plan_name,
+        price: plan.monthly_fee.toLocaleString(),
+        rawPrice: plan.monthly_fee,
+        data: plan.data_limit,
+        selected: false
+      }));
+      setRecommendedPlans(plans);
+    }
+  }
+
+  // 고객 메시지 클릭 핸들러
+  const handleCustomerMessageClick = (messageContent) => {
+    setTriggerMessage({ content: messageContent, timestamp: Date.now() })
+  }
+
+  // [NEW] Handle Analysis Tag Click
+  const handleAnalysisTagClick = (messageId, e) => {
+    e.stopPropagation(); // prevent bubble click
+
+    if (selectedAnalysisId === messageId) {
+      // Deselect (Return to live mode)
+      setSelectedAnalysisId(null);
+      return;
+    }
+
+    const analysis = upsellHistory[messageId];
+    if (analysis) {
+      setSelectedAnalysisId(messageId);
+      updateRightPanel(analysis);
+      setRightPanelTab('intent');
+    }
+  };
 
   // Call Status Polling Function
   const pollCallStatus = async () => {
@@ -33,7 +124,23 @@ export default function AgentDashboard() {
       const resp = await fetch(`${API_URL}/active-call`)
       const data = await resp.json()
       if (data.active && data.call) {
+        const wasInactive = callStatus === 'idle' || callStatus === 'ended'
         setCallStatus('active')
+
+        // 새로운 통화가 시작되면 고객 분석 탭으로 전환 및 RAG 초기화
+        if (wasInactive) {
+          setRightPanelTab('intent')
+          setRagScripts([]) // 새 통화 시 RAG 결과 초기화
+
+          // [NEW] Upsell Analysis Reset
+          setCustomerIntent('대화 내용 분석 대기 중...')
+          setAiReasoning([])
+          setRecommendedPlans([])
+          setSelectedAnalysisId(null)
+          setUpsellHistory({})
+          setAnalyzingMessages(new Set())
+        }
+
         setCustomerInfo({
           name: data.call.customer['이름'] || 'Unknown',
           phone: data.call.customer['번호'],
@@ -46,55 +153,47 @@ export default function AgentDashboard() {
         })
         setCurrentPhoneNumber(data.call.customer['번호'])
         if (view === 'main' && data.call.messages) {
-          setMessages(data.call.messages.map(m => ({
+          const newMessages = data.call.messages.map(m => ({
             role: m.role,
             content: m.content,
-            keywords: m.keywords
-          })))
+            keywords: m.keywords,
+            messageId: m.messageId
+          }));
+          setMessages(newMessages);
+
+          // [NEW] Mark user messages as analyzing if they don't have analysis yet
+          newMessages.forEach(msg => {
+            if (msg.role === 'user' && msg.messageId && !upsellHistory[msg.messageId]) {
+              setAnalyzingMessages(prev => new Set(prev).add(msg.messageId));
+            }
+          });
         }
 
-        // Backend-driven Upsell Analysis Update
-        if (data.call.upsellAnalysis) {
+        // Backend-driven RAG Results Update
+        if (data.call.ragResults && data.call.ragResults.length > 0) {
+          if (data.call.ragResults.length !== ragScripts.length) {
+            setRagScripts(data.call.ragResults)
+          }
+        }
+
+        // [NEW] Process Upsell Analysis History
+        if (data.call.upsellAnalysisHistory) {
+          const historyMap = {};
+          data.call.upsellAnalysisHistory.forEach(item => {
+            if (item.messageId) historyMap[item.messageId] = item;
+          });
+          setUpsellHistory(historyMap);
+        }
+
+        // Backend-driven Upsell Analysis Update (Latest)
+        // [MODIFIED] Do NOT automatically update right panel even if selectedAnalysisId is null.
+        // User must click the tag to see the analysis.
+        /* 
+        if (data.call.upsellAnalysis && selectedAnalysisId === null) {
           const result = data.call.upsellAnalysis;
-
-          // Update Intent logic
-          if (result.customer_intent) {
-            setCustomerIntent(result.customer_intent);
-          }
-
-          // Update Reasoning logic
-          // Update Reasoning logic
-          if (result.reasoning_steps && result.reasoning_steps.length > 0) {
-            setAiReasoning(result.reasoning_steps);
-          } else if (result.upsell_reason) {
-            setAiReasoning([result.upsell_reason]);
-          } else if (result.intent_description) {
-            // Format description as reasoning step
-            setAiReasoning([result.intent_description]);
-          }
-
-          // Update Recommended Plans logic
-          if (result.recommended_plans && result.recommended_plans.length > 0) {
-            const plans = result.recommended_plans.map((plan, idx) => ({
-              id: idx,
-              name: plan.plan_name,
-              price: plan.monthly_fee.toLocaleString(),
-              rawPrice: plan.monthly_fee,
-              data: plan.data_limit,
-              selected: false
-            }));
-            // avoid re-rendering loop or state overwrite if same?
-            // Simple implementation: overwrite if different length or force update
-            // better to check deep equality but for now overwrite is safe enough 
-            // as we poll every 2sec.
-            // Ideally check if plans changed.
-            // JSON stringify comparison:
-            // if (JSON.stringify(plans) !== JSON.stringify(recommendedPlans)) { setRecommendedPlans(plans); }
-            // Since we don't have deep access to prev state in polling function easily without ref,
-            // we will just set it. React handles atomic updates efficiently enough.
-            setRecommendedPlans(plans);
-          }
-        }
+          updateRightPanel(result);
+        } 
+        */
       } else if (callStatus === 'active') { // Call ended externally
         setCallStatus('ended')
         // Auto-navigate to Report Tab
@@ -109,7 +208,7 @@ export default function AgentDashboard() {
   useEffect(() => {
     const interval = setInterval(pollCallStatus, 2000)
     return () => clearInterval(interval)
-  }, [callStatus])
+  }, [callStatus, selectedAnalysisId, upsellHistory, view])
 
   // Auto-navigate Effect when manually ending call
   useEffect(() => {
@@ -118,32 +217,14 @@ export default function AgentDashboard() {
     }
   }, [callStatus])
 
-  // 추천 요금제 (AI가 분석해서 제공)
-  const [recommendedPlans, setRecommendedPlans] = useState([])
+  // Auto-scroll to bottom of chat
+  const chatContainerRef = useRef(null)
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight
+    }
+  }, [messages])
 
-  // AI 분석/사고 과정
-  const [aiReasoning, setAiReasoning] = useState([])
-  const [isAnalyzingIntent, setIsAnalyzingIntent] = useState(false)
-
-  // 선택된 요금제에 대한 추천 스크립트
-  const [planScript, setPlanScript] = useState('')
-  const [scriptLoading, setScriptLoading] = useState(false)
-
-  // 고객 의중 (AI 분석 결과)
-  const [customerIntent, setCustomerIntent] = useState('대화 내용 분석 대기 중...')
-
-  const [sampleList] = useState([
-    { id: 0, title: '인터넷 장애 - 긴급 문의' },
-    { id: 1, title: '통화품질 불량 - 유심 교체' },
-    { id: 2, title: '요금제 변경 - 데이터 절약' },
-    { id: 3, title: '청구서 이상 - 부가서비스 항의' },
-    { id: 4, title: '기기 변경 - 아이폰 구매' },
-    { id: 5, title: '데이터 차단 - 추가 구매' },
-    { id: 6, title: '해외 로밍 - 일본 여행' },
-    { id: 7, title: '명의 도용 오해 - 미납 발견' },
-    { id: 8, title: '5G 커버리지 불만' },
-    { id: 9, title: '어르신 요금제 - 효도 상담' }
-  ])
 
   useEffect(() => {
     loadReports()
@@ -240,6 +321,9 @@ export default function AgentDashboard() {
 
       if (!startResp.ok) throw new Error('Call start failed')
 
+      // 새로운 통화 시작 시 고객 분석 탭으로 전환
+      setRightPanelTab('intent')
+
       // Refresh UI immediately to show Customer Info
       await pollCallStatus()
 
@@ -255,7 +339,7 @@ export default function AgentDashboard() {
             callId: 'current', // Backend handles current active call
             speaker: msg.role === 'user' ? 'customer' : 'agent',
             text: msg.content,
-            keywords: [] // Sample JSON might not have keywords, or we extract them here
+            keywords: msg.keywords || []
           })
         })
       }
@@ -281,19 +365,26 @@ export default function AgentDashboard() {
     }
 
     setProcessing(true)
+    setRegenerating(currentReport !== null)
     setProcessingStep(0)
     setProcessingMessage('보고서 생성을 준비하고 있습니다...')
     setRightPanelTab('report')
 
     try {
+      // 재생성 카운트 계산
+      const regenerationCount = currentReport?.regeneration_count || 0
+      const isRegeneration = currentReport !== null
+
       const response = await fetch(`${API_URL}/process`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: messages,
           metadata: {
-            source: 'auto_analysis',
+            source: isRegeneration ? 'regeneration' : 'auto_analysis',
             uploaded_at: new Date().toISOString(),
+            original_report_id: isRegeneration ? currentReport.reportId : null,
+            regeneration_count: isRegeneration ? regenerationCount + 1 : 0,
             // Capture UI Snapshot for Report Detail View
             ui_snapshot: {
               recommendedPlans: recommendedPlans,
@@ -301,7 +392,20 @@ export default function AgentDashboard() {
               planScript: planScript,
               customerIntent: customerIntent,
               // Only capture selection state
-              selectedPlanId: recommendedPlans.find(p => p.selected)?.id || null
+              selectedPlanId: recommendedPlans.find(p => p.selected)?.id || null,
+              // RAG Scripts
+              ragScripts: ragScripts.map(script => ({
+                id: script.id,
+                title: script.title,
+                content: script.content,
+                sources: script.sources?.map(s => ({
+                  page: s.page,
+                  content: s.content
+                })),
+                isAutoGenerated: script.isAutoGenerated,
+                isManual: script.isManual,
+                isError: script.isError
+              }))
             }
           }
         })
@@ -338,7 +442,10 @@ export default function AgentDashboard() {
 
               if (data.step === 5 && data.data) {
                 const result = data.data
-                setCurrentReport(result)
+                setCurrentReport({
+                  ...result,
+                  regeneration_count: result.regeneration_count || 0
+                })
                 setSelectedReportId(result.reportId)
                 await loadReports()
               }
@@ -350,11 +457,13 @@ export default function AgentDashboard() {
       }
 
       setProcessing(false)
+      setRegenerating(false)
     } catch (err) {
       console.error('Process error:', err)
       const errorMessage = err.message || '보고서 생성 중 오류가 발생했습니다.'
       alert(`❌ 오류 발생\n\n${errorMessage}\n\n백엔드 서버가 실행 중인지 확인해주세요.`)
       setProcessing(false)
+      setRegenerating(false)
       setProcessingStep(0)
       setProcessingMessage('')
     }
@@ -373,7 +482,8 @@ export default function AgentDashboard() {
           created_at: data.report.created_at,
           // Load Snapshot
           ui_snapshot: data.report.ui_snapshot,
-          customer_phone: data.report.customer_phone
+          customer_phone: data.report.customer_phone,
+          regeneration_count: data.report.regeneration_count || 0
         })
         setMessages(data.report.messages || [])
         setSelectedReportId(reportId)
@@ -533,21 +643,17 @@ export default function AgentDashboard() {
       {/* Header */}
       <header className="main-header">
         <div className="header-left">
-          <h1 className="app-title">AiDam</h1>
+          {/* 통화 상태 표시 */}
+          <div className={`call-status-badge ${callStatus === 'active' ? 'status-active' : 'status-ended'}`}>
+            <span className="material-icons-outlined">
+              {callStatus === 'active' ? 'phone_in_talk' : 'phone_disabled'}
+            </span>
+            <span>{callStatus === 'active' ? '통화중' : '통화 종료됨'}</span>
+          </div>
           <div className="header-divider"></div>
-
-          <button
-            className="end-call-btn"
-            onClick={handleEndCall}
-            disabled={callStatus === 'ended' || callStatus === 'idle'}
-          >
-            <span className="material-icons-outlined">call_end</span>
-            <span>End Call</span>
-          </button>
 
           {/* Dev Tool: Simulate Call */}
           <div style={{ position: 'relative', display: 'inline-block' }}>
-            {/* ... keeping simulation button ... */}
             <button
               className="sim-call-btn"
               onClick={toggleSimulationMenu}
@@ -572,7 +678,6 @@ export default function AgentDashboard() {
               </span>
               {isSimulating ? 'Simulating...' : 'Simulate Call'}
             </button>
-            {/* ... keeping simulation menu ... */}
             {simulationMenuOpen && (
               <div style={{
                 position: 'absolute',
@@ -636,45 +741,8 @@ export default function AgentDashboard() {
         </div>
 
         <div className="header-center">
-          {/* ... keeping center components ... */}
-          <div className="recording-status">
-            <span className="recording-dot"></span>
-            <span className="recording-text">Recording...</span>
-          </div>
-          <div className="volume-control">
-            <span className="material-icons-outlined">volume_down</span>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={volume}
-              onChange={(e) => setVolume(e.target.value)}
-              className="volume-slider"
-            />
-            <span className="material-icons-outlined">volume_up</span>
-          </div>
-          <div className="call-controls">
-            <button
-              className={`control-btn ${isPaused ? 'active' : ''}`}
-              onClick={() => setIsPaused(!isPaused)}
-            >
-              <span className="material-icons-outlined">{isPaused ? 'play_arrow' : 'pause'}</span>
-            </button>
-            <button
-              className={`control-btn ${isMuted ? 'active' : ''}`}
-              onClick={() => setIsMuted(!isMuted)}
-            >
-              <span className="material-icons-outlined">{isMuted ? 'mic' : 'mic_off'}</span>
-            </button>
-          </div>
-          <div className="audio-visualizer">
-            <span className="bar" style={{ height: '8px' }}></span>
-            <span className="bar active" style={{ height: '20px' }}></span>
-            <span className="bar" style={{ height: '12px' }}></span>
-            <span className="bar active" style={{ height: '24px' }}></span>
-            <span className="bar" style={{ height: '8px' }}></span>
-            <span className="bar active" style={{ height: '16px' }}></span>
-          </div>
+          {/* AIDAM을 중앙으로 이동 */}
+          <h1 className="app-title">AiDam</h1>
         </div>
 
         <div className="header-right">
@@ -778,29 +846,68 @@ export default function AgentDashboard() {
                     </div>
                   </div>
                 ) : (
-                  <div className="chat-messages">
-                    {messages.map((msg, idx) => (
-                      <div key={idx} className={`chat-bubble ${msg.role}`}>
-                        <div className="bubble-avatar">
-                          <span className="material-icons-outlined">
-                            {msg.role === 'user' ? 'person' : 'support_agent'}
-                          </span>
-                        </div>
-                        <div className="bubble-content">
-                          <span className="bubble-author">
-                            {msg.role === 'user' ? '고객' : '상담사'}
-                          </span>
+                  <div className="chat-messages" ref={chatContainerRef}>
+                    {messages.map((msg, idx) => {
+                      const analysis = msg.messageId ? upsellHistory[msg.messageId] : null;
+                      const isSelected = selectedAnalysisId === msg.messageId;
+
+                      return (
+                        <div key={idx} className={`message-wrapper ${msg.role}`}>
+                          {/* Message Bubble */}
                           <div
-                            className="bubble-text"
-                            dangerouslySetInnerHTML={{
-                              __html: msg.role === 'user'
-                                ? highlightKeywords(msg.content)
-                                : msg.content
-                            }}
-                          />
+                            className={`chat-bubble ${msg.role} ${msg.role === 'user' ? 'clickable' : ''}`}
+                            onClick={msg.role === 'user' ? () => handleCustomerMessageClick(msg.content) : undefined}
+                            title={msg.role === 'user' ? '클릭하여 스크립트 생성' : ''}
+                          >
+                            <div className="bubble-avatar">
+                              <span className="material-icons-outlined">
+                                {msg.role === 'user' ? 'person' : 'smart_toy'}
+                              </span>
+                            </div>
+                            <div className="bubble-content">
+                              <div className="bubble-author">
+                                {msg.role === 'user' ? '고객' : 'AI 상담사'}
+                              </div>
+                              <div className="bubble-text" dangerouslySetInnerHTML={{ __html: highlightKeywords(msg.content) }}></div>
+                            </div>
+                          </div>
+
+                          {/* [NEW] Analysis Tag (Only for User messages) */}
+                          {msg.role === 'user' && msg.messageId && (
+                            <div
+                              className={`analysis-tag ${analysis
+                                ? (analysis.status === 'filtered'
+                                  ? 'filtered'
+                                  : (analysis.upsell_possibility || '').toLowerCase())
+                                : 'analyzing'
+                                } ${isSelected ? 'selected' : ''}`}
+                              onClick={analysis && analysis.status !== 'filtered' ? (e) => handleAnalysisTagClick(msg.messageId, e) : undefined}
+                              title={
+                                analysis
+                                  ? (analysis.status === 'filtered' ? `분석 제외: ${analysis.reason}` : "AI 분석 결과 보기")
+                                  : "분석 중..."
+                              }
+                              style={{ cursor: (analysis && analysis.status !== 'filtered') ? 'pointer' : 'default' }}
+                            >
+                              <span className="material-icons-outlined tag-icon">
+                                {analysis
+                                  ? (analysis.status === 'filtered' ? 'block' : 'analytics')
+                                  : 'hourglass_empty'
+                                }
+                              </span>
+                              <span className="tag-label">
+                                {analysis
+                                  ? (analysis.status === 'filtered' ? '제외됨' : '분석 완료')
+                                  : '분석중'
+                                }
+                              </span>
+                              {isSelected && <span className="material-icons-outlined tag-check">check</span>}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
+
                   </div>
                 )}
               </div>
@@ -808,13 +915,22 @@ export default function AgentDashboard() {
 
             {/* Center Panel: AI Recommended Scripts */}
             <section className="center-panel">
-              <RAGAssistant messages={messages} />
+              <RAGAssistant
+                messages={messages}
+                triggerMessage={triggerMessage}
+                ragScripts={ragScripts}
+                setRagScripts={setRagScripts}
+                onClear={() => {
+                  setMessages([])
+                  setIsRagCleared(true)
+                }}
+              />
             </section>
 
             {/* Right Panel: Customer Intent + Recommendations */}
-            <aside className="right-panel">
+            <aside className="right-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
               {/* Tab Buttons */}
-              <div className="panel-tabs">
+              <div className="panel-tabs" style={{ flexShrink: 0 }}>
                 <button
                   className={`tab-btn ${rightPanelTab === 'intent' ? 'active' : ''}`}
                   onClick={() => setRightPanelTab('intent')}
@@ -829,210 +945,308 @@ export default function AgentDashboard() {
                 </button>
               </div>
 
-              {rightPanelTab === 'intent' && (
-                <>
-                  {/* Customer Intent Card */}
-                  <div className="info-card intent-card">
-                    <h2>고객 의중 판단 AI</h2>
-                    <div className="intent-content">
-                      <p>
-                        <span className="intent-highlight">{customerIntent}</span>
-                      </p>
+              <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column', gap: '1rem', padding: '0.5rem 0' }}>
+                {rightPanelTab === 'intent' && (
+                  <>
+                    {/* Customer Intent Card - 개선된 스타일 */}
+                    <div className="info-card intent-card">
+                      <h2 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '1rem' }}>고객 의중 판단 AI</h2>
+                      <div className="intent-content">
+                        <p>
+                          <span className="intent-highlight" style={{
+                            display: 'inline-block',
+                            padding: '0.5rem 1rem',
+                            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                            color: 'white',
+                            borderRadius: '8px',
+                            fontWeight: '600',
+                            fontSize: '0.95rem',
+                            boxShadow: '0 2px 8px rgba(102, 126, 234, 0.3)'
+                          }}>
+                            {customerIntent}
+                          </span>
+                        </p>
 
-                      {/* AI Thinking Process */}
-                      {(isAnalyzingIntent || aiReasoning.length > 0) && (
-                        <div className="intent-reasoning">
-                          <div className="reasoning-label">
-                            <span className="material-icons-outlined">psychology</span>
-                            <span>AI 사고 과정</span>
+                        {/* AI Thinking Process */}
+                        {(isAnalyzingIntent || aiReasoning.length > 0) && (
+                          <div className="intent-reasoning" style={{ marginTop: '1rem' }}>
+                            <div className="reasoning-label" style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.5rem',
+                              marginBottom: '0.75rem',
+                              color: '#6366f1',
+                              fontWeight: '500',
+                              fontSize: '0.9rem'
+                            }}>
+                              <span className="material-icons-outlined">psychology</span>
+                              <span>AI 사고 과정</span>
+                            </div>
+                            <div className="reasoning-steps" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                              {aiReasoning.map((step, idx) => (
+                                <span key={idx} className="reasoning-step" style={{
+                                  padding: '0.5rem 0.75rem',
+                                  background: '#f8fafc',
+                                  border: '1px solid #e2e8f0',
+                                  borderRadius: '6px',
+                                  fontSize: '0.85rem',
+                                  color: '#475569',
+                                  lineHeight: '1.5'
+                                }}>{step}</span>
+                              ))}
+                              {isAnalyzingIntent && (
+                                <span className="reasoning-step" style={{
+                                  padding: '0.5rem 0.75rem',
+                                  background: '#f8fafc',
+                                  border: '1px solid #e2e8f0',
+                                  borderRadius: '6px',
+                                  fontSize: '0.85rem',
+                                  color: '#475569'
+                                }}>...</span>
+                              )}
+                            </div>
                           </div>
-                          <div className="reasoning-steps">
-                            {aiReasoning.map((step, idx) => (
-                              <span key={idx} className="reasoning-step">{step}</span>
-                            ))}
-                            {isAnalyzingIntent && (
-                              <span className="reasoning-step">...</span>
-                            )}
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Recommended Plans - 개선된 스타일 */}
+                    <div className="info-card plans-card">
+                      <h2 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '0.5rem' }}>추천 요금제</h2>
+                      <p className="plans-subtitle" style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '1rem' }}>고객에게 제안할 요금제:</p>
+
+                      {/* Current Plan Display */}
+                      {customerInfo && customerInfo.plan && (
+                        <div className="current-plan-display-v2">
+                          <div className="current-label">현재 이용중</div>
+                          <div className="current-plan-row">
+                            <div className="current-plan-info">
+                              <span className="current-plan-name">{customerInfo.plan}</span>
+                              <span className="current-plan-price">{customerInfo.billing?.toLocaleString() || '35,000'}원</span>
+                            </div>
+                            <div className="current-plan-badge">사용중</div>
                           </div>
                         </div>
                       )}
-                    </div>
-                    <div className="intent-arrow"></div>
-                  </div>
 
-                  {/* Recommended Plans */}
-                  <div className="info-card plans-card">
-                    <h2>추천 요금제</h2>
-                    <p className="plans-subtitle">고객에게 제안할 요금제:</p>
-
-                    {/* Current Plan Display (Top of list, Read-only) - Improved Design */}
-                    {customerInfo && customerInfo.plan && (
-                      <div className="current-plan-display-v2">
-                        <div className="current-label">현재 이용중</div>
-                        <div className="current-plan-row">
-                          <div className="current-plan-info">
-                            <span className="current-plan-name">{customerInfo.plan}</span>
-                            <span className="current-plan-price">{customerInfo.billing?.toLocaleString() || '35,000'}원</span>
+                      <div className="plans-list" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        {recommendedPlans.length === 0 ? (
+                          <div className="empty-plans" style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
+                            <p>추천할 만한 요금제가 없습니다.</p>
                           </div>
-                          <div className="current-plan-badge">사용중</div>
+                        ) : (
+                          recommendedPlans.map(plan => (
+                            <div
+                              key={plan.id}
+                              className={`plan-item ${plan.selected ? 'selected' : ''}`}
+                              onClick={() => handlePlanSelect(plan.id)}
+                              style={{
+                                padding: '1rem',
+                                background: plan.selected ? '#eff6ff' : '#fff',
+                                border: plan.selected ? '2px solid #3b82f6' : '1px solid #e2e8f0',
+                                borderRadius: '8px',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                              }}
+                            >
+                              <h4 style={{
+                                fontSize: '0.95rem',
+                                fontWeight: '600',
+                                marginBottom: '0.5rem',
+                                color: plan.selected ? '#1d4ed8' : '#1e293b'
+                              }}>{plan.name}</h4>
+                              <div className="plan-detail-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
+                                <span className="plan-price" style={{ fontWeight: '600', color: '#3b82f6' }}>월 {plan.price}원</span>
+                                <span className="plan-data" style={{ color: '#64748b' }}>{plan.data}</span>
+                              </div>
+                              {customerInfo && (
+                                <div className="price-diff-badge" style={{ marginTop: '0.5rem' }}>
+                                  {(() => {
+                                    const currentPrice = customerInfo.billing || 35000;
+                                    const diff = plan.rawPrice - currentPrice;
+                                    if (diff > 0) return <span style={{ color: '#ef4444', fontSize: '0.8rem' }}>+{diff.toLocaleString()}원</span>;
+                                    if (diff < 0) return <span style={{ color: '#10b981', fontSize: '0.8rem', fontWeight: '600' }}>{diff.toLocaleString()}원</span>;
+                                    return <span style={{ color: '#64748b', fontSize: '0.8rem' }}>동일 요금</span>;
+                                  })()}
+                                </div>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      {/* Plan Script Box - 개선된 스타일 */}
+                      <div className="plan-script-box" style={{
+                        marginTop: '1rem',
+                        background: '#fff',
+                        padding: '1rem',
+                        borderRadius: '8px',
+                        border: '1px solid #e2e8f0'
+                      }}>
+                        <div className="script-box-header" style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          marginBottom: '0.75rem',
+                          color: '#64748b',
+                          fontSize: '0.85rem',
+                          fontWeight: '500'
+                        }}>
+                          <span className="material-icons-outlined" style={{ fontSize: '18px' }}>edit_note</span>
+                          <span>추천 스크립트</span>
+                        </div>
+                        {scriptLoading ? (
+                          <div className="script-loading" style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '1.5rem',
+                            gap: '0.75rem'
+                          }}>
+                            <div className="script-loader"></div>
+                            <span style={{ fontSize: '0.85rem', color: '#64748b' }}>스크립트 생성 중...</span>
+                          </div>
+                        ) : planScript ? (
+                          <div className="script-content-box" style={{
+                            padding: '0.75rem',
+                            background: '#f8fafc',
+                            borderRadius: '6px',
+                            lineHeight: '1.6',
+                            fontSize: '0.9rem',
+                            color: '#334155'
+                          }}>
+                            <p style={{ margin: 0 }}>{planScript}</p>
+                          </div>
+                        ) : (
+                          <div className="script-placeholder" style={{
+                            padding: '1.5rem',
+                            textAlign: 'center',
+                            color: '#94a3b8',
+                            fontSize: '0.85rem',
+                            lineHeight: '1.6'
+                          }}>
+                            <p style={{ margin: 0 }}>요금제를 선택하면 현재 대화 맥락에 맞는<br />추천 스크립트가 생성됩니다.</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {rightPanelTab === 'report' && (
+                  <div className="report-panel-content">
+                    {processing && (
+                      <div className="report-loading">
+                        <div className="loading-header">
+                          <div className="loading-spinner"></div>
+                          <h3>보고서 생성 중...</h3>
+                        </div>
+
+                        <div className="progress-container">
+                          <div className="progress-bar-track">
+                            <div
+                              className="progress-bar-fill"
+                              style={{ width: `${(processingStep / 5) * 100}%` }}
+                            ></div>
+                          </div>
+
+                          <div className="progress-steps-compact">
+                            {['준비', '분석', '생성', '저장', '완료'].map((label, idx) => (
+                              <div
+                                key={idx}
+                                className={`step-compact ${processingStep >= idx + 1 ? 'active' : ''} ${processingStep > idx + 1 ? 'completed' : ''}`}
+                              >
+                                <div className="step-dot"></div>
+                                <span>{label}</span>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="progress-status">
+                            <div className="status-message">{processingMessage}</div>
+                          </div>
                         </div>
                       </div>
                     )}
 
-                    <div className="plans-list">
-                      {recommendedPlans.length === 0 ? (
-                        <div className="empty-plans">
-                          <p>추천할 만한 요금제가 없습니다.</p>
+                    {!processing && !currentReport && (
+                      <div className="empty-report">
+                        <span className="material-icons-outlined empty-icon">description</span>
+                        <p>보고서가 아직 생성되지 않았습니다.</p>
+                        <p className="empty-help">
+                          상담이 종료되면<br />
+                          "보고서 생성" 버튼을 클릭하세요.
+                        </p>
+                        {messages.length > 0 && (
+                          <button onClick={handleProcess} className={`generate-report-btn ${callStatus === 'ended' ? 'shimmer-highlight' : ''}`}>
+                            <span className="material-icons-outlined">summarize</span>
+                            보고서 생성
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {!processing && currentReport && (
+                      <div className="report-content">
+                        <div className="summary-section">
+                          <h3>📋 요약</h3>
+                          <p>{currentReport.analysis?.summary}</p>
                         </div>
-                      ) : (
-                        recommendedPlans.map(plan => (
-                          <div
-                            key={plan.id}
-                            className={`plan-item ${plan.selected ? 'selected' : ''}`}
-                            onClick={() => handlePlanSelect(plan.id)}
-                          >
-                            <h4 className={plan.selected ? 'plan-name-selected' : ''}>{plan.name}</h4>
-                            <div className="plan-detail-row">
-                              <span className="plan-price">월 {plan.price}원</span>
-                              <span className="plan-data">{plan.data}</span>
-                            </div>
-                            {customerInfo && (
-                              <div className="price-diff-badge">
-                                {(() => {
-                                  const currentPrice = customerInfo.billing || 35000;
-                                  const diff = plan.rawPrice - currentPrice;
-                                  if (diff > 0) return <span className="diff-plus">+{diff.toLocaleString()}원</span>;
-                                  if (diff < 0) return <span className="diff-minus">{diff.toLocaleString()}원</span>;
-                                  return <span className="diff-zero">동일 요금</span>;
-                                })()}
-                              </div>
+
+                        <div className="topics-section">
+                          <h4>주요 주제</h4>
+                          <div className="topic-tags">
+                            {currentReport.analysis?.main_topics?.map((topic, i) => (
+                              <span key={i} className="topic-tag">{topic}</span>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="stats-section">
+                          <div className="stat-item">
+                            <span className="stat-number">{currentReport.analysis?.statistics?.total_messages}</span>
+                            <span className="stat-label">전체</span>
+                          </div>
+                          <div className="stat-item">
+                            <span className="stat-number">{currentReport.analysis?.statistics?.user_messages}</span>
+                            <span className="stat-label">고객</span>
+                          </div>
+                          <div className="stat-item">
+                            <span className="stat-number">{currentReport.analysis?.statistics?.assistant_messages}</span>
+                            <span className="stat-label">상담사</span>
+                          </div>
+                        </div>
+
+                        <div className="detailed-report">
+                          <h3>📝 상세 보고서</h3>
+                          <div className="markdown-content">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {currentReport.report}
+                            </ReactMarkdown>
+                          </div>
+
+                          {/* 보고서 재생성 버튼 */}
+                          <div className="report-actions-footer">
+                            <button
+                              onClick={handleProcess}
+                              className="regenerate-report-btn"
+                              disabled={regenerating || processing}
+                            >
+                              <span className="material-icons-outlined">refresh</span>
+                              {regenerating ? '재생성 중...' : '보고서 재생성'}
+                            </button>
+                            {currentReport.regeneration_count > 0 && (
+                              <span className="regeneration-badge">
+                                {currentReport.regeneration_count}회 재생성됨
+                              </span>
                             )}
                           </div>
-                        ))
-                      )}
-                    </div>
-
-                    {/* Plan Script Box */}
-                    <div className="plan-script-box">
-                      <div className="script-box-header">
-                        <span className="material-icons-outlined">edit_note</span>
-                        <span>추천 스크립트</span>
+                        </div>
                       </div>
-                      {scriptLoading ? (
-                        <div className="script-loading">
-                          <div className="script-loader"></div>
-                          <span>스크립트 생성 중...</span>
-                        </div>
-                      ) : planScript ? (
-                        <div className="script-content-box">
-                          <p>{planScript}</p>
-                        </div>
-                      ) : (
-                        <div className="script-placeholder">
-                          <p>요금제를 선택하면 현재 대화 맥락에 맞는<br />추천 스크립트가 생성됩니다.</p>
-                        </div>
-                      )}
-                    </div>
+                    )}
                   </div>
-                </>
-              )}
-
-              {rightPanelTab === 'report' && (
-                <div className="report-panel-content">
-                  {processing && (
-                    <div className="report-loading">
-                      <div className="loading-header">
-                        <div className="loading-spinner"></div>
-                        <h3>보고서 생성 중...</h3>
-                      </div>
-
-                      <div className="progress-container">
-                        <div className="progress-bar-track">
-                          <div
-                            className="progress-bar-fill"
-                            style={{ width: `${(processingStep / 5) * 100}%` }}
-                          ></div>
-                        </div>
-
-                        <div className="progress-steps-compact">
-                          {['준비', '분석', '생성', '저장', '완료'].map((label, idx) => (
-                            <div
-                              key={idx}
-                              className={`step-compact ${processingStep >= idx + 1 ? 'active' : ''} ${processingStep > idx + 1 ? 'completed' : ''}`}
-                            >
-                              <div className="step-dot"></div>
-                              <span>{label}</span>
-                            </div>
-                          ))}
-                        </div>
-
-                        <div className="progress-status">
-                          <div className="status-message">{processingMessage}</div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {!processing && !currentReport && (
-                    <div className="empty-report">
-                      <span className="material-icons-outlined empty-icon">description</span>
-                      <p>보고서가 아직 생성되지 않았습니다.</p>
-                      <p className="empty-help">
-                        상담이 종료되면<br />
-                        "보고서 생성" 버튼을 클릭하세요.
-                      </p>
-                      {messages.length > 0 && (
-                        <button onClick={handleProcess} className={`generate-report-btn ${callStatus === 'ended' ? 'shimmer-highlight' : ''}`}>
-                          <span className="material-icons-outlined">summarize</span>
-                          보고서 생성
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {!processing && currentReport && (
-                    <div className="report-content">
-                      <div className="summary-section">
-                        <h3>📋 요약</h3>
-                        <p>{currentReport.analysis?.summary}</p>
-                      </div>
-
-                      <div className="topics-section">
-                        <h4>주요 주제</h4>
-                        <div className="topic-tags">
-                          {currentReport.analysis?.main_topics?.map((topic, i) => (
-                            <span key={i} className="topic-tag">{topic}</span>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="stats-section">
-                        <div className="stat-item">
-                          <span className="stat-number">{currentReport.analysis?.statistics?.total_messages}</span>
-                          <span className="stat-label">전체</span>
-                        </div>
-                        <div className="stat-item">
-                          <span className="stat-number">{currentReport.analysis?.statistics?.user_messages}</span>
-                          <span className="stat-label">고객</span>
-                        </div>
-                        <div className="stat-item">
-                          <span className="stat-number">{currentReport.analysis?.statistics?.assistant_messages}</span>
-                          <span className="stat-label">상담사</span>
-                        </div>
-                      </div>
-
-                      <div className="detailed-report">
-                        <h3>📝 상세 보고서</h3>
-                        <div className="markdown-content">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {currentReport.report}
-                          </ReactMarkdown>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+                )}
+              </div>
             </aside>
           </div>
         )
@@ -1060,28 +1274,57 @@ export default function AgentDashboard() {
                     <div key={report.id} className="report-item">
                       <div className="report-header-row">
                         <div className="report-info">
-                          <h3>{report.id}</h3>
-                          <span className="report-date">{new Date(report.timestamp).toLocaleString('ko-KR')}</span>
+                          <div className="report-title-row">
+                            {report.customer_name && (
+                              <h3 className="customer-name-title">{report.customer_name}</h3>
+                            )}
+                            {report.customer_phone && (
+                              <span className="customer-phone-badge">{report.customer_phone}</span>
+                            )}
+                          </div>
+                          <span className="report-date">
+                            <span className="material-icons-outlined">schedule</span>
+                            {new Date(report.created_at).toLocaleString('ko-KR', {
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </span>
+                          <span className="report-id-small">ID: {report.id}</span>
                         </div>
                         <div className="report-actions">
                           <button
                             onClick={() => viewReport(report.id)}
                             className="view-btn"
                           >
+                            <span className="material-icons-outlined">visibility</span>
                             보기
                           </button>
                           <button
                             onClick={(e) => deleteReport(report.id, e)}
                             className="delete-btn"
                           >
+                            <span className="material-icons-outlined">delete</span>
                             삭제
                           </button>
                         </div>
                       </div>
-                      {report.analysis && (
+                      {report.summary && (
                         <div className="report-preview">
-                          <span className="preview-label">주요 토픽:</span>
-                          <span className="preview-text">{report.analysis.main_topics?.join(', ')}</span>
+                          <span className="preview-label">
+                            <span className="material-icons-outlined">summarize</span>
+                            요약:
+                          </span>
+                          <span className="preview-text">{report.summary}</span>
+                        </div>
+                      )}
+                      {report.topics && report.topics.length > 0 && (
+                        <div className="report-topics">
+                          {report.topics.map((topic, i) => (
+                            <span key={i} className="topic-badge">{topic}</span>
+                          ))}
                         </div>
                       )}
                     </div>
@@ -1158,46 +1401,195 @@ export default function AgentDashboard() {
                   </div>
                   <div className="context-content" style={{ padding: '20px', overflowY: 'auto', flex: 1 }}>
 
-                    {/* Recovered Intent */}
+                    {/* RAG Scripts */}
+                    {currentReport.ui_snapshot?.ragScripts && currentReport.ui_snapshot.ragScripts.length > 0 && (
+                      <div className="info-card rag-scripts-card" style={{ marginBottom: '20px' }}>
+                        <h3>
+                          <span className="material-icons-outlined" style={{ fontSize: '18px', verticalAlign: 'middle', marginRight: '8px' }}>auto_awesome</span>
+                          생성된 상담 가이드
+                        </h3>
+                        <div style={{ marginTop: '15px' }}>
+                          {currentReport.ui_snapshot.ragScripts.map((script, idx) => (
+                            <div
+                              key={script.id || idx}
+                              className="rag-script-item"
+                              style={{
+                                padding: '12px',
+                                background: script.isError ? '#fef2f2' : '#fff',
+                                border: '1px solid #e2e8f0',
+                                borderRadius: '8px',
+                                marginBottom: '10px'
+                              }}
+                            >
+                              <h4 style={{ fontSize: '13px', fontWeight: '600', color: '#555', marginBottom: '8px' }}>
+                                {script.isAutoGenerated && '🤖 '}{script.isManual && '📖 '}{script.title}
+                              </h4>
+                              <p style={{ fontSize: '12px', lineHeight: '1.6', color: '#333', whiteSpace: 'pre-wrap' }}>
+                                {script.content}
+                              </p>
+                              {script.sources && script.sources.length > 0 && (
+                                <div style={{ marginTop: '8px', fontSize: '11px', color: '#666' }}>
+                                  {script.sources.map((source, sIdx) => (
+                                    <div key={sIdx} style={{ padding: '4px 8px', background: '#f9fafb', borderRadius: '4px', marginTop: '4px' }}>
+                                      📄 {source.page ? `매뉴얼 p.${source.page}` : '참조 문서'}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Recovered Intent - 프론트 스타일 적용 */}
                     <div className="info-card intent-card" style={{ marginBottom: '20px' }}>
-                      <h3>당시 고객 의중 파악</h3>
-                      <p style={{ marginTop: '10px', color: '#333' }}>
-                        {currentReport.ui_snapshot?.customerIntent || '기록된 의중 데이터 없음'}
-                      </p>
+                      <h2 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '1rem' }}>고객 의중 판단 AI</h2>
+                      <div className="intent-content">
+                        <p>
+                          <span className="intent-highlight" style={{
+                            display: 'inline-block',
+                            padding: '0.5rem 1rem',
+                            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                            color: 'white',
+                            borderRadius: '8px',
+                            fontWeight: '600',
+                            fontSize: '0.95rem'
+                          }}>
+                            {currentReport.ui_snapshot?.customerIntent || '기록된 의중 데이터 없음'}
+                          </span>
+                        </p>
+
+                        {/* AI Thinking Process */}
+                        {currentReport.ui_snapshot?.aiReasoning && currentReport.ui_snapshot.aiReasoning.length > 0 && (
+                          <div className="intent-reasoning" style={{ marginTop: '1rem' }}>
+                            <div className="reasoning-label" style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.5rem',
+                              marginBottom: '0.75rem',
+                              color: '#6366f1',
+                              fontWeight: '500'
+                            }}>
+                              <span className="material-icons-outlined">psychology</span>
+                              <span>AI 사고 과정</span>
+                            </div>
+                            <div className="reasoning-steps" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                              {currentReport.ui_snapshot.aiReasoning.map((step, idx) => (
+                                <span key={idx} className="reasoning-step" style={{
+                                  padding: '0.5rem 0.75rem',
+                                  background: '#f8fafc',
+                                  border: '1px solid #e2e8f0',
+                                  borderRadius: '6px',
+                                  fontSize: '0.85rem',
+                                  color: '#475569',
+                                  lineHeight: '1.5'
+                                }}>{step}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
-                    {/* Recovered Plans */}
-                    <div className="info-card plans-card">
-                      <h3>제안된 요금제</h3>
-                      <div className="plans-list" style={{ marginTop: '15px' }}>
+                    {/* Recovered Plans - 프론트 스타일 적용 */}
+                    <div className="info-card plans-card" style={{ marginBottom: '20px' }}>
+                      <h2 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '0.5rem' }}>추천 요금제</h2>
+                      <p className="plans-subtitle" style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '1rem' }}>고객에게 제안할 요금제:</p>
+
+                      {/* Current Plan Display */}
+                      {messages.length > 0 && messages[0].content && (
+                        <div className="current-plan-display-v2">
+                          <div className="current-label">현재 이용중</div>
+                          <div className="current-plan-row">
+                            <div className="current-plan-info">
+                              <span className="current-plan-name">
+                                {/* 보고서 content에서 요금제 정보 추출 또는 기본값 */}
+                                {currentReport.content?.match(/\*\*요금제\*\*:\s*([^\n]+)/)?.[1] || '현재 요금제'}
+                              </span>
+                            </div>
+                            <div className="current-plan-badge">사용중</div>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="plans-list" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                         {(currentReport.ui_snapshot?.recommendedPlans || []).length === 0 ? (
-                          <p style={{ color: '#999', fontStyle: 'italic' }}>제안된 요금제 없음</p>
+                          <div className="empty-plans" style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
+                            <p>추천할 만한 요금제가 없습니다.</p>
+                          </div>
                         ) : (
                           (currentReport.ui_snapshot?.recommendedPlans || []).map((plan, idx) => (
                             <div
                               key={idx}
                               className={`plan-item ${plan.id === currentReport.ui_snapshot?.selectedPlanId ? 'selected' : ''}`}
                               style={{
+                                padding: '1rem',
+                                background: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#eff6ff' : '#fff',
                                 border: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '2px solid #3b82f6' : '1px solid #e2e8f0',
-                                background: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#eff6ff' : '#fff'
+                                borderRadius: '8px',
+                                cursor: 'default',
+                                transition: 'all 0.2s'
                               }}
                             >
-                              <h4 style={{ color: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#1d4ed8' : '#333' }}>{plan.name}</h4>
-                              <p className="plan-detail">월 {plan.price}원, {plan.data}</p>
+                              <h4 style={{
+                                fontSize: '0.95rem',
+                                fontWeight: '600',
+                                marginBottom: '0.5rem',
+                                color: plan.id === currentReport.ui_snapshot?.selectedPlanId ? '#1d4ed8' : '#1e293b'
+                              }}>{plan.name}</h4>
+                              <div className="plan-detail-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
+                                <span className="plan-price" style={{ fontWeight: '600', color: '#3b82f6' }}>월 {plan.price}원</span>
+                                <span className="plan-data" style={{ color: '#64748b' }}>{plan.data}</span>
+                              </div>
+                              {plan.rawPrice && (
+                                <div className="price-diff-badge" style={{ marginTop: '0.5rem' }}>
+                                  {(() => {
+                                    const currentPrice = 35000; // 기본값 또는 보고서에서 추출
+                                    const diff = plan.rawPrice - currentPrice;
+                                    if (diff > 0) return <span style={{ color: '#ef4444', fontSize: '0.8rem' }}>+{diff.toLocaleString()}원</span>;
+                                    if (diff < 0) return <span style={{ color: '#10b981', fontSize: '0.8rem', fontWeight: '600' }}>{diff.toLocaleString()}원</span>;
+                                    return <span style={{ color: '#64748b', fontSize: '0.8rem' }}>동일 요금</span>;
+                                  })()}
+                                </div>
+                              )}
                             </div>
                           ))
                         )}
                       </div>
                     </div>
 
-                    {/* Recovered Script */}
+                    {/* Recovered Script - 프론트 스타일 적용 */}
                     {currentReport.ui_snapshot?.planScript && (
-                      <div className="plan-script-box" style={{ marginTop: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                        <h4 style={{ marginBottom: '10px', fontSize: '14px', color: '#555' }}>
-                          <span className="material-icons-outlined" style={{ fontSize: '16px', verticalAlign: 'middle' }}>description</span>
-                          생성된 추천 스크립트
-                        </h4>
-                        <p style={{ lineHeight: '1.5', color: '#333' }}>{currentReport.ui_snapshot.planScript}</p>
+                      <div className="plan-script-box" style={{
+                        marginTop: '0',
+                        background: '#fff',
+                        padding: '1rem',
+                        borderRadius: '8px',
+                        border: '1px solid #e2e8f0'
+                      }}>
+                        <div className="script-box-header" style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          marginBottom: '0.75rem',
+                          color: '#64748b',
+                          fontSize: '0.85rem',
+                          fontWeight: '500'
+                        }}>
+                          <span className="material-icons-outlined" style={{ fontSize: '18px' }}>edit_note</span>
+                          <span>추천 스크립트</span>
+                        </div>
+                        <div className="script-content-box" style={{
+                          padding: '0.75rem',
+                          background: '#f8fafc',
+                          borderRadius: '6px',
+                          lineHeight: '1.6',
+                          fontSize: '0.9rem',
+                          color: '#334155'
+                        }}>
+                          <p style={{ margin: 0 }}>{currentReport.ui_snapshot.planScript}</p>
+                        </div>
                       </div>
                     )}
 

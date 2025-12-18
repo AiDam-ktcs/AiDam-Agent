@@ -7,7 +7,7 @@ module.exports = {
   agents: {
     report: {
       name: 'Report Agent',
-      url: process.env.REPORT_AGENT_URL || 'http://localhost:8001',
+      url: process.env.REPORT_AGENT_URL || 'http://127.0.0.1:8001',
       enabled: process.env.REPORT_AGENT_ENABLED !== 'false',
       description: '최종 정리 에이전트 (STT/RAG 후 실행)',
       timeout: 60000, // 60초
@@ -39,7 +39,8 @@ module.exports = {
       endpoints: {
         health: '/',
         chat: '/chat',
-        search: '/search'
+        search: '/search',
+        onMessage: '/event/on-message'
       }
     },
     upsell: {

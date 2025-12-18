@@ -159,7 +159,9 @@ app.post('/api/stt/call-start', (req, res) => {
     startTime: timestamp || new Date().toISOString(),
     startTime: timestamp || new Date().toISOString(),
     messages: [], // 대화 내역 저장소 초기화
-    upsellAnalysis: null // Upsell 분석 결과 초기화
+    upsellAnalysis: null, // Upsell 분석 결과 (Latest)
+    upsellAnalysisHistory: [], // [NEW] 메세지별 분석 이력
+    ragResults: [] // RAG 자동 생성 결과
   };
 
   saveConsultation(ACTIVE_CALL);
@@ -186,7 +188,8 @@ app.post('/api/stt/line', async (req, res) => {
     role: speaker === 'customer' ? 'user' : 'assistant',
     content: text,
     keywords: keywords || [],
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    messageId: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` // [NEW] 메시지 ID 생성
   };
 
   ACTIVE_CALL.messages.push(newMessage);
@@ -198,21 +201,21 @@ app.post('/api/stt/line', async (req, res) => {
   // 분석이 필요한지는 Upsell Agent가 스스로 판단하도록 함
   (async () => {
     try {
+      // 현재 활성 콜의 메타데이터(고객정보 등) 생성
+      const payload = {
+        message: newMessage,
+        recent_history: ACTIVE_CALL.messages.slice(-10), // 최근 10개 메시지 포함
+        active_call_context: {
+          callId: ACTIVE_CALL.callId,
+          customer: ACTIVE_CALL.customer,
+          current_plan: ACTIVE_CALL.customer['요금제'] || 'Unknown' // 단순화된 정보
+        },
+        history_length: ACTIVE_CALL.messages.length
+      };
+
       const upsellAgent = agentsConfig.getAgent('upsell');
       if (upsellAgent && upsellAgent.enabled) {
         const url = agentsConfig.buildUrl('upsell', 'onMessage');
-
-        // 현재 활성 콜의 메타데이터(고객정보 등)도 함께 전송
-        const payload = {
-          message: newMessage,
-          recent_history: ACTIVE_CALL.messages.slice(-10), // 최근 10개 메시지 포함
-          active_call_context: {
-            callId: ACTIVE_CALL.callId,
-            customer: ACTIVE_CALL.customer,
-            current_plan: ACTIVE_CALL.customer['요금제'] || 'Unknown' // 단순화된 정보
-          },
-          history_length: ACTIVE_CALL.messages.length
-        };
 
         // Non-blocking fetch
         fetch(url, {
@@ -221,6 +224,26 @@ app.post('/api/stt/line', async (req, res) => {
           body: JSON.stringify(payload),
           timeout: 5000 // 짧은 타임아웃
         }).catch(err => console.error(`[System] Failed to forward to Upsell Agent: ${err.message}`));
+      }
+
+      // RAG Agent로도 동일한 데이터 전송
+      const ragAgent = agentsConfig.getAgent('rag');
+      console.log(`[DEBUG] RAG Agent config:`, ragAgent ? { enabled: ragAgent.enabled, url: ragAgent.url } : 'NOT FOUND');
+      if (ragAgent && ragAgent.enabled) {
+        const url = agentsConfig.buildUrl('rag', 'onMessage');
+        console.log(`[DEBUG] Sending to RAG Agent: ${url}`);
+        console.log(`[DEBUG] Payload role: ${payload.message?.role}, content: ${payload.message?.content?.substring(0, 30)}...`);
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          timeout: 5000
+        })
+          .then(res => res.json())
+          .then(data => console.log(`[DEBUG] RAG Agent response:`, data))
+          .catch(err => console.error(`[System] Failed to forward to RAG Agent: ${err.message}`));
+      } else {
+        console.log(`[DEBUG] RAG Agent skipped: agent=${!!ragAgent}, enabled=${ragAgent?.enabled}`);
       }
     } catch (e) {
       console.error(`[System] Error triggering upsell logic: ${e.message}`);
@@ -243,7 +266,8 @@ app.post('/stt/incoming-call', (req, res) => {
     status: 'active',
     customer: customer || { '이름': 'Unknown', '번호': phone_number },
     startTime: new Date().toISOString(),
-    messages: []
+    messages: [],
+    ragResults: [] // RAG 자동 생성 결과
   };
 
   saveConsultation(ACTIVE_CALL);
@@ -267,7 +291,8 @@ app.post('/call/outbound', (req, res) => {
     status: 'dialing',
     customer: customer || { '이름': 'Unknown', '번호': phone_number },
     startTime: new Date().toISOString(),
-    messages: []
+    messages: [],
+    ragResults: [] // RAG 자동 생성 결과
   };
 
   saveConsultation(ACTIVE_CALL);
@@ -287,6 +312,7 @@ app.get('/active-call', (req, res) => {
       ...ACTIVE_CALL,
       // Agent 결과 포함
       ragResults: ACTIVE_CALL.ragResults || [],
+      upsellAnalysisHistory: ACTIVE_CALL.upsellAnalysisHistory || [], // [NEW]
       latestIntent: ACTIVE_CALL.latestIntent || null
     } : null
   });
@@ -340,9 +366,12 @@ async function triggerReportGeneration(callData) {
       callId: callData.callId,
       created_at: report.created_at,
       customer_phone: callData.customer['번호'],
+      customer_name: callData.customer['이름'],
       analysis: analysisResult.analysis,
       content: report.content,
-      format: 'markdown'
+      format: 'markdown',
+      regeneration_count: metadata?.regeneration_count || 0,
+      original_report_id: metadata?.original_report_id || null
     };
 
     const reportPath = path.join(REPORTS_DIR, `${report.id}.json`);
@@ -647,7 +676,8 @@ app.post('/generate-report', async (req, res) => {
         created_at: result.report.created_at,
         analysis,
         content: result.report.content,
-        format
+        format,
+        regeneration_count: 0
       };
 
       const reportPath = path.join(REPORTS_DIR, `${result.report.id}.json`);
@@ -700,6 +730,10 @@ app.post('/process', async (req, res) => {
 
             // 최종 결과에서 보고서 저장
             if (eventData.data && eventData.data.success && eventData.data.reportId) {
+              // Extract customer info from active call if available
+              const customerName = ACTIVE_CALL?.customer?.['이름'] || eventData.data.customer_name || 'Unknown';
+              const customerPhone = ACTIVE_CALL?.customer?.['번호'] || eventData.data.customer_phone || 'Unknown';
+
               const reportData = {
                 id: eventData.data.reportId,
                 created_at: eventData.data.created_at,
@@ -707,8 +741,11 @@ app.post('/process', async (req, res) => {
                 content: eventData.data.report,
                 format: 'markdown',
                 messages: messages,
-                customer_phone: eventData.data.customer_phone,
-                ui_snapshot: metadata?.ui_snapshot || null // Save UI Snapshot
+                customer_phone: customerPhone,
+                customer_name: customerName,
+                ui_snapshot: metadata?.ui_snapshot || null, // Save UI Snapshot
+                regeneration_count: metadata?.regeneration_count || 0,
+                original_report_id: metadata?.original_report_id || null
               };
 
               const reportPath = path.join(REPORTS_DIR, `${eventData.data.reportId}.json`);
@@ -774,7 +811,9 @@ app.get('/reports', (req, res) => {
             created_at: data.created_at,
             summary: data.analysis?.summary || 'No summary',
             topics: data.analysis?.main_topics || [],
-            customer_phone: data.customer_phone
+            customer_phone: data.customer_phone,
+            customer_name: data.customer_name,
+            regeneration_count: data.regeneration_count || 0
           };
         } catch (err) {
           console.error(`Error reading report ${f}:`, err);
@@ -838,7 +877,7 @@ app.delete('/reports/:id', (req, res) => {
  */
 app.post('/rag/chat', async (req, res) => {
   try {
-    const { message, history } = req.body;
+    const { message, history, force_generate } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: 'message is required' });
@@ -855,7 +894,7 @@ app.post('/rag/chat', async (req, res) => {
       });
     }
 
-    console.log(`[Orchestrator] Forwarding chat request to RAG Agent: ${message}`);
+    console.log(`[Orchestrator] Forwarding chat request to RAG Agent: ${message} (force: ${force_generate || false})`);
 
     const ragAgent = agentsConfig.getAgent('rag');
     const url = agentsConfig.buildUrl('rag', 'chat');
@@ -865,7 +904,8 @@ app.post('/rag/chat', async (req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message: message,
-        history: history || []
+        history: history || [],
+        force_generate: force_generate || false
       }),
       timeout: ragAgent.timeout
     });
@@ -1183,12 +1223,70 @@ app.post('/internal/upsell-result', (req, res) => {
     return res.json({ success: false, reason: 'inactive_call' });
   }
 
-  console.log(`[Orchestrator] Received Upsell Analysis for ${callId}`);
+  console.log(`[Orchestrator] Received Upsell Analysis for ${callId} (Msg: ${analysisResult.messageId || 'unknown'})`);
 
-  // 활성 콜 상태 업데이트
+  // 활성 콜 상태 업데이트 (Latest)
   ACTIVE_CALL.upsellAnalysis = analysisResult;
 
-  // 필요하다면 여기서 프론트엔드에 소켓 이벤트를 쏠 수도 있음 (현재는 폴링 방식이므로 데이터만 업데이트)
+  // [NEW] History에 추가 (메시지 ID 기준)
+  if (!ACTIVE_CALL.upsellAnalysisHistory) {
+    ACTIVE_CALL.upsellAnalysisHistory = [];
+  }
+
+  // 중복 방지 (messageId가 있는 경우)
+  if (analysisResult.messageId) {
+    const exists = ACTIVE_CALL.upsellAnalysisHistory.find(a => a.messageId === analysisResult.messageId);
+    if (!exists) {
+      ACTIVE_CALL.upsellAnalysisHistory.push(analysisResult);
+    } else {
+      // 이미 있으면 업데이트?
+      const idx = ACTIVE_CALL.upsellAnalysisHistory.findIndex(a => a.messageId === analysisResult.messageId);
+      ACTIVE_CALL.upsellAnalysisHistory[idx] = analysisResult;
+    }
+  } else {
+    // messageId가 없으면 그냥 추가 (Fallback)
+    ACTIVE_CALL.upsellAnalysisHistory.push(analysisResult);
+  }
+
+  res.json({ success: true });
+});
+
+/**
+ * POST /internal/rag-result
+ * RAG Agent가 분석 결과를 푸시하는 내부 엔드포인트
+ */
+app.post('/internal/rag-result', (req, res) => {
+  const { callId, result } = req.body;
+
+  if (!ACTIVE_CALL || ACTIVE_CALL.callId !== callId) {
+    console.warn(`[Orchestrator] Received RAG result for inactive call: ${callId}`);
+    return res.json({ success: false, reason: 'inactive_call' });
+  }
+
+  // 스킵된 경우 저장하지 않음
+  if (result.skipped) {
+    console.log(`[Orchestrator] RAG skipped for ${callId}: ${result.reason}`);
+    return res.json({ success: true, skipped: true });
+  }
+
+  console.log(`[Orchestrator] Received RAG Result for ${callId}`);
+
+  // ragResults 배열 초기화 (없으면)
+  if (!ACTIVE_CALL.ragResults) {
+    ACTIVE_CALL.ragResults = [];
+  }
+
+  // 새 스크립트 추가
+  const newScript = {
+    id: Date.now(),
+    title: result.query.length > 30 ? result.query.substring(0, 30) + '...' : result.query,
+    content: result.answer,
+    sources: result.sources || [],
+    isAutoGenerated: true,
+    timestamp: new Date().toISOString()
+  };
+
+  ACTIVE_CALL.ragResults.push(newScript);
 
   res.json({ success: true });
 });
