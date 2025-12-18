@@ -39,6 +39,8 @@ except ImportError:
 try:
     from config import (
         HTTP_SERVER_PORT,
+        WEBSOCKET_URL,
+        DIAL_PHONE_NUMBER,
         SAMPLE_RATE_INPUT,
         SAMPLE_RATE_TARGET,
         CHUNK_DURATION,
@@ -288,23 +290,53 @@ BEAM_DECODER_MODE = "simple"  # "simple" or "nemo"
 def log(msg, *args):
     print(f"Media WS: ", msg, *args)
 
+def format_phone_number(phone_number):
+    """
+    국제 형식의 전화번호를 한국 형식으로 변환
+    
+    Args:
+        phone_number: +8210xxxxxxxx 형식의 전화번호
+        
+    Returns:
+        str: 010-xxxx-xxxx 형식의 전화번호
+    """
+    if not phone_number:
+        return phone_number
+    
+    # 숫자만 추출
+    digits = ''.join(filter(str.isdigit, phone_number))
+    
+    # +82로 시작하는 경우 82 제거하고 0 추가
+    if phone_number.startswith('+82'):
+        digits = '0' + digits[2:]
+    
+    # 11자리 숫자인 경우만 변환: 01012345678 → 010-1234-5678
+    if len(digits) == 11:
+        return f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
+    
+    # 11자리가 아니면 원본 반환
+    return phone_number
+
 def notify_call_start(call_info):
     """MainBackend에 통화 시작 알림"""
     if not MAINBACKEND_ENABLED:
         return
     
     try:
+        # 전화번호 형식 변환: +8210xxxxxxxx → 010-xxxx-xxxx
+        formatted_phone = format_phone_number(call_info['from_number'])
+        
         response = requests.post(
             f'{MAINBACKEND_URL}/api/stt/call-start',
             json={
                 'callId': call_info['call_sid'],
-                'phoneNumber': call_info['from_number'],
+                'phoneNumber': formatted_phone,
                 'timestamp': call_info['timestamp']
             },
             timeout=MAINBACKEND_TIMEOUT
         )
         if response.status_code == 200:
-            log(f"✓ Call start notified to MainBackend")
+            log(f"✓ Call start notified to MainBackend (Phone: {formatted_phone})")
         else:
             log(f"✗ MainBackend error: {response.status_code}")
     except Exception as e:
@@ -344,12 +376,15 @@ def notify_call_end(call_sid):
     
     try:
         response = requests.post(
-            f'{MAINBACKEND_URL}/call/end',
-            json={'callId': call_sid},
+            f'{MAINBACKEND_URL}/api/stt/call-end',
+            json={
+                'callId': call_sid,
+                'status': 'disconnected'
+            },
             timeout=MAINBACKEND_TIMEOUT
         )
         if response.status_code == 200:
-            log(f"✓ Call end notified to MainBackend")
+            log(f"✓ Call end notified to MainBackend (status: disconnected)")
         else:
             log(f"✗ MainBackend error: {response.status_code}")
     except Exception as e:
@@ -563,8 +598,13 @@ def return_twiml():
     
     log(f"TwiML 요청 받음 - From: {from_number}, To: {to_number}, CallSid: {call_sid}")
     
-    # 템플릿에 파라미터 전달
-    return render_template('streams.xml', From=from_number, To=to_number, CallSid=call_sid)
+    # 템플릿에 파라미터 전달 (환경변수에서 로드)
+    return render_template('streams.xml', 
+                         From=from_number, 
+                         To=to_number, 
+                         CallSid=call_sid,
+                         WebsocketUrl=WEBSOCKET_URL,
+                         DialPhoneNumber=DIAL_PHONE_NUMBER)
 
 @sock.route("/stream")
 def echo(ws):

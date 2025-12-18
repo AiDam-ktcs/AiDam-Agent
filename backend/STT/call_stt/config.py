@@ -13,6 +13,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # .env 파일에 설정하거나, 기본값 사용
 AGENT_PHONE_NUMBER = os.getenv('AGENT_PHONE_NUMBER', '+821012345678')
 WEBSOCKET_URL = os.getenv('WEBSOCKET_URL', 'wss://your-ngrok-url.ngrok-free.dev/stream')
+DIAL_PHONE_NUMBER = os.getenv('DIAL_PHONE_NUMBER', '+821024748863')
 
 # 서버 설정
 HTTP_SERVER_PORT = int(os.getenv('HTTP_SERVER_PORT', '5000'))
