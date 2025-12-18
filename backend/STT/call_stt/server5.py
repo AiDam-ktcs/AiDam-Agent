@@ -12,6 +12,10 @@ import torch
 import librosa
 import soundfile as sf
 import requests
+from openai import OpenAI
+
+# tqdm (진행 바) 억제
+os.environ['TQDM_DISABLE'] = '1'
 
 # 프로젝트 루트 경로 추가
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -26,6 +30,13 @@ import nemo.collections.asr as nemo_asr
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import re
 import unicodedata
+
+# NeMo 로깅 레벨 조정 (장황한 출력 줄이기)
+import logging
+# NeMo 관련 모든 로거 억제
+for logger_name in ['nemo_logger', 'NeMo', 'nemo']:
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.ERROR)  # ERROR 이상만 표시
 
 # KenLM import
 try:
@@ -63,7 +74,9 @@ try:
         RECORDINGS_DIR,
         MAINBACKEND_URL,
         MAINBACKEND_ENABLED,
-        MAINBACKEND_TIMEOUT
+        MAINBACKEND_TIMEOUT,
+        OPENAI_API_KEY,
+        OPENAI_MODEL
     )
 except ImportError:
     # config.py가 없는 경우 기본값 사용
@@ -88,9 +101,56 @@ except ImportError:
     ASR_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'Conformer-CTC-BPE.nemo')
     KEYWORD_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'qwen3-1.7b')
     RECORDINGS_DIR = os.path.join(BASE_DIR, 'call_recordings')
-    MAINBACKEND_URL = 'http://localhost:3000'
+    # WSL 환경 감지하여 Windows 호스트 IP 사용
+    def _get_mainbackend_url():
+        # 방법 1: WSL 환경변수 확인
+        if os.getenv('WSL_DISTRO_NAME') or os.getenv('WSLENV'):
+            pass  # WSL 환경
+        # 방법 2: /proc/version 확인
+        elif os.path.exists('/proc/version'):
+            try:
+                with open('/proc/version', 'r') as f:
+                    if 'microsoft' not in f.read().lower():
+                        return 'http://localhost:3000'
+            except:
+                return 'http://localhost:3000'
+        else:
+            return 'http://localhost:3000'
+        
+        # WSL 환경: Windows 호스트 IP 가져오기
+        # 방법 1: ip route로 기본 게이트웨이 확인 (가장 정확)
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['sh', '-c', "ip route show | grep -i default | awk '{ print $3}'"],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                host_ip = result.stdout.strip()
+                print(f"[Fallback] WSL detected, using Windows host IP (via ip route): {host_ip}")
+                return f'http://{host_ip}:3000'
+        except:
+            pass
+        
+        # 방법 2: /etc/resolv.conf (fallback)
+        try:
+            with open('/etc/resolv.conf', 'r') as f:
+                for line in f:
+                    if 'nameserver' in line:
+                        host_ip = line.split()[1]
+                        if not host_ip.startswith('10.255.'):
+                            print(f"[Fallback] WSL detected, using Windows host IP (via resolv.conf): {host_ip}")
+                            return f'http://{host_ip}:3000'
+        except:
+            pass
+        return 'http://localhost:3000'
+    MAINBACKEND_URL = _get_mainbackend_url()
     MAINBACKEND_ENABLED = True
     MAINBACKEND_TIMEOUT = 5
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    OPENAI_MODEL = 'gpt-5-nano'
 
 class SimpleCTCBeamDecoder:
     """
@@ -280,8 +340,9 @@ sock = Sock(app)
 # 전역 변수로 모델 저장
 denoiser_model = None
 asr_model = None
-keyword_model = None
-keyword_tokenizer = None
+# keyword_model = None  # Qwen3 모델 비활성화 (OpenAI API로 대체)
+# keyword_tokenizer = None  # Qwen3 토크나이저 비활성화 (OpenAI API로 대체)
+openai_client = None  # OpenAI API 클라이언트
 device = None
 ctc_decoder = None  # SimpleCTC Beam Search 디코더
 USE_BEAM_SEARCH = False  # Beam Search 사용 여부
@@ -392,7 +453,7 @@ def notify_call_end(call_sid):
 
 def load_models():
     """서버 시작 시 모델 로드"""
-    global denoiser_model, asr_model, keyword_model, keyword_tokenizer, device, ctc_decoder, USE_BEAM_SEARCH, BEAM_DECODER_MODE
+    global denoiser_model, asr_model, openai_client, device, ctc_decoder, USE_BEAM_SEARCH, BEAM_DECODER_MODE
     
     log("Loading models...")
     
@@ -420,6 +481,10 @@ def load_models():
     
     # ASR 모델 로드
     try:
+        # NeMo 로깅 임시 억제
+        import logging
+        logging.getLogger('NeMo').setLevel(logging.ERROR)
+        
         asr_model = nemo_asr.models.EncDecCTCModelBPE.restore_from(ASR_MODEL_PATH, map_location=device)
         asr_model.eval()
         
@@ -543,48 +608,73 @@ def load_models():
         ctc_decoder = None
         USE_BEAM_SEARCH = False
     
-    # 키워드 추출 모델 로드 (Qwen3-1.7B)
+    # ============================================================
+    # Qwen3 키워드 추출 모델 (비활성화 - OpenAI API로 대체)
+    # ============================================================
+    # try:
+    #     # 로컬 모델 파일 존재 여부 확인
+    #     model_files = ['pytorch_model.bin', 'model.safetensors']
+    #     has_model_weights = False
+    #     
+    #     if os.path.exists(KEYWORD_MODEL_PATH):
+    #         # 실제 모델 가중치 파일이 있는지 확인
+    #         has_model_weights = any(
+    #             os.path.exists(os.path.join(KEYWORD_MODEL_PATH, f)) 
+    #             for f in model_files
+    #         )
+    #     
+    #     if has_model_weights:
+    #         # 로컬 모델 사용
+    #         keyword_model_path = KEYWORD_MODEL_PATH
+    #         log(f"Loading keyword extraction model from local: {KEYWORD_MODEL_PATH}")
+    #     else:
+    #         # HuggingFace에서 다운로드 (Qwen3-1.7B 사용)
+    #         keyword_model_path = "Qwen/Qwen3-1.7B"
+    #         log(f"Local model weights not found. Downloading from HuggingFace: {keyword_model_path}")
+    #         log(f"  Note: First download will take 5-10 minutes (~1.7GB)")
+    #     
+    #     keyword_tokenizer = AutoTokenizer.from_pretrained(keyword_model_path)
+    #     keyword_model = AutoModelForCausalLM.from_pretrained(
+    #         keyword_model_path,
+    #         torch_dtype="auto",
+    #         device_map="auto"
+    #     )
+    #     log("✓ Keyword extraction model loaded successfully")
+    #     log(f"  - Model source: {'Local' if has_model_weights else 'HuggingFace'}")
+    #     log(f"  - Model path: {keyword_model_path}")
+    # except Exception as e:
+    #     log(f"Warning: Could not load keyword model: {e}")
+    #     keyword_model = None
+    #     keyword_tokenizer = None
+    # ============================================================
+    
+    # OpenAI API 클라이언트 초기화 (키워드 추출용)
     try:
-        # 로컬 모델 파일 존재 여부 확인
-        model_files = ['pytorch_model.bin', 'model.safetensors']
-        has_model_weights = False
-        
-        if os.path.exists(KEYWORD_MODEL_PATH):
-            # 실제 모델 가중치 파일이 있는지 확인
-            has_model_weights = any(
-                os.path.exists(os.path.join(KEYWORD_MODEL_PATH, f)) 
-                for f in model_files
-            )
-        
-        if has_model_weights:
-            # 로컬 모델 사용
-            keyword_model_path = KEYWORD_MODEL_PATH
-            log(f"Loading keyword extraction model from local: {KEYWORD_MODEL_PATH}")
+        if OPENAI_API_KEY:
+            openai_client = OpenAI(api_key=OPENAI_API_KEY)
+            log("✓ OpenAI API client initialized successfully")
+            log(f"  - Model: {OPENAI_MODEL}")
         else:
-            # HuggingFace에서 다운로드 (Qwen3-1.7B 사용)
-            keyword_model_path = "Qwen/Qwen3-1.7B"
-            log(f"Local model weights not found. Downloading from HuggingFace: {keyword_model_path}")
-            log(f"  Note: First download will take 5-10 minutes (~1.7GB)")
-        
-        keyword_tokenizer = AutoTokenizer.from_pretrained(keyword_model_path)
-        keyword_model = AutoModelForCausalLM.from_pretrained(
-            keyword_model_path,
-            torch_dtype="auto",
-            device_map="auto"
-        )
-        log("✓ Keyword extraction model loaded successfully")
-        log(f"  - Model source: {'Local' if has_model_weights else 'HuggingFace'}")
-        log(f"  - Model path: {keyword_model_path}")
+            log("⚠️ OPENAI_API_KEY not set. Keyword extraction will be disabled.")
+            openai_client = None
     except Exception as e:
-        log(f"Warning: Could not load keyword model: {e}")
-        keyword_model = None
-        keyword_tokenizer = None
+        log(f"Warning: Could not initialize OpenAI client: {e}")
+        openai_client = None
     
     log("All models loaded and ready!")
 
 @app.route("/", methods=["GET"])
 def index():
     return "OK", 200
+
+@app.route("/health", methods=["GET"])
+def health():
+    """헬스체크 엔드포인트 - MainBackend와 통신용"""
+    return {
+        "status": "healthy",
+        "service": "STT Module",
+        "port": HTTP_SERVER_PORT
+    }, 200
 
 @app.route('/twiml', methods=['GET', 'POST'])
 def return_twiml():
@@ -843,7 +933,8 @@ def echo(ws):
 
 def extract_keywords(text):
     """
-    Qwen3-1.7B를 사용하여 한국어 문장에서 키워드 추출
+    OpenAI API를 사용하여 한국어 문장에서 키워드 추출
+    (기존 Qwen3-1.7B에서 OpenAI gpt-5-nano로 변경)
     
     Args:
         text: 키워드를 추출할 한국어 문장
@@ -851,7 +942,7 @@ def extract_keywords(text):
     Returns:
         list: 추출된 키워드 리스트
     """
-    if not text or not text.strip() or keyword_model is None or keyword_tokenizer is None:
+    if not text or not text.strip() or openai_client is None:
         return []
     
     try:
@@ -871,31 +962,15 @@ def extract_keywords(text):
             {"role": "user", "content": f"문장: {text}"}
         ]
 
-        text_input = keyword_tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=False
+        # OpenAI API 호출
+        response = openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=messages,
+            max_completion_tokens=128
+            # temperature 제거 - gpt-5-nano는 기본값(1)만 지원
         )
-
-        model_inputs = keyword_tokenizer([text_input], return_tensors="pt").to(keyword_model.device)
-
-        generated_ids = keyword_model.generate(
-            **model_inputs,
-            max_new_tokens=128,
-            min_new_tokens=5,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.8,
-            top_k=20,
-            pad_token_id=keyword_tokenizer.eos_token_id
-        )
-
-        output_ids = generated_ids[0][len(model_inputs.input_ids[0]):]
-        decoded_text = keyword_tokenizer.decode(output_ids, skip_special_tokens=True).strip()
-
-        # think 태그 제거
-        decoded_text = re.sub(r'<think>.*?</think>', '', decoded_text, flags=re.DOTALL).strip()
+        
+        decoded_text = response.choices[0].message.content.strip()
 
         # JSON 추출
         m = re.search(r'\{.*\}', decoded_text, flags=re.DOTALL)
@@ -908,6 +983,78 @@ def extract_keywords(text):
     except Exception as e:
         log(f"Error in extract_keywords: {e}")
         return []
+
+# ============================================================
+# 기존 Qwen3 기반 extract_keywords 함수 (비활성화)
+# ============================================================
+# def extract_keywords_qwen3(text):
+#     """
+#     Qwen3-1.7B를 사용하여 한국어 문장에서 키워드 추출
+#     
+#     Args:
+#         text: 키워드를 추출할 한국어 문장
+#         
+#     Returns:
+#         list: 추출된 키워드 리스트
+#     """
+#     if not text or not text.strip() or keyword_model is None or keyword_tokenizer is None:
+#         return []
+#     
+#     try:
+#         system_prompt = (
+#             "당신은 한국어 한 문장에서 검색/분류에 유의미한 핵심 키워드만 추출합니다.\n"
+#             "규칙:\n"
+#             "- 키워드는 고유명사, 기술명, 개념, 객체 중심\n"
+#             "- 감정, 추임새, 일반적인 말은 제외\n"
+#             "- 키워드가 필요 없으면 반드시 빈 배열을 반환\n"
+#             "- 출력은 반드시 JSON 한 줄로만: {\"keywords\": [..]}\n"
+#             "- 추론 과정, 설명, 추가 문장 금지\n"
+#             "- 추출하는 키워드는 반드시 주어진 text 안에 있는 단어일것\n"
+#         )
+#
+#         messages = [
+#             {"role": "system", "content": system_prompt},
+#             {"role": "user", "content": f"문장: {text}"}
+#         ]
+#
+#         text_input = keyword_tokenizer.apply_chat_template(
+#             messages,
+#             tokenize=False,
+#             add_generation_prompt=True,
+#             enable_thinking=False
+#         )
+#
+#         model_inputs = keyword_tokenizer([text_input], return_tensors="pt").to(keyword_model.device)
+#
+#         generated_ids = keyword_model.generate(
+#             **model_inputs,
+#             max_new_tokens=128,
+#             min_new_tokens=5,
+#             do_sample=True,
+#             temperature=0.7,
+#             top_p=0.8,
+#             top_k=20,
+#             pad_token_id=keyword_tokenizer.eos_token_id
+#         )
+#
+#         output_ids = generated_ids[0][len(model_inputs.input_ids[0]):]
+#         decoded_text = keyword_tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+#
+#         # think 태그 제거
+#         decoded_text = re.sub(r'<think>.*?</think>', '', decoded_text, flags=re.DOTALL).strip()
+#
+#         # JSON 추출
+#         m = re.search(r'\{.*\}', decoded_text, flags=re.DOTALL)
+#         if not m:
+#             return []
+#
+#         result = json.loads(m.group(0))
+#         return result.get('keywords', [])
+#         
+#     except Exception as e:
+#         log(f"Error in extract_keywords: {e}")
+#         return []
+# ============================================================
 
 def is_duplicate_transcription(new_text, recent_texts, similarity_threshold=0.7):
     """
@@ -985,8 +1132,12 @@ def process_audio_chunk(buffer, input_sr, target_sr):
                     if BEAM_DECODER_MODE == "nemo":
                         # NeMo 공식 BeamCTCDecoder 사용
                         try:
-                            # transcribe with beam search
-                            transcription = asr_model.transcribe([audio_denoised], batch_size=1)
+                            # transcribe with beam search (verbose 비활성화)
+                            transcription = asr_model.transcribe(
+                                [audio_denoised], 
+                                batch_size=1,
+                                verbose=False
+                            )
                             if transcription and len(transcription) > 0:
                                 result = transcription[0]
                                 if hasattr(result, 'text'):
@@ -1036,23 +1187,19 @@ def process_audio_chunk(buffer, input_sr, target_sr):
                             log(f"SimpleCTC Beam Search failed, falling back to Greedy: {e}")
                 
                 # Greedy 디코딩 (기본 또는 폴백)
-                # ASR 모델의 decoding strategy를 임시로 greedy로 변경
-                original_strategy = None
-                try:
-                    if hasattr(asr_model, 'cfg') and hasattr(asr_model.cfg, 'decoding'):
-                        original_strategy = asr_model.cfg.decoding.strategy
-                        asr_model.change_decoding_strategy(None)  # Reset to greedy
-                except:
-                    pass
+                # decoding_cfg를 명시적으로 전달하여 불필요한 로그 출력 방지
+                from omegaconf import OmegaConf
+                greedy_cfg = OmegaConf.create({
+                    'strategy': 'greedy',
+                    'preserve_alignments': False,
+                    'compute_timestamps': False
+                })
                 
-                transcription = asr_model.transcribe([audio_denoised], batch_size=1)
-                
-                # 원래 strategy 복구
-                if original_strategy and USE_BEAM_SEARCH and BEAM_DECODER_MODE == "nemo":
-                    try:
-                        asr_model.change_decoding_strategy(asr_model.cfg.decoding)
-                    except:
-                        pass
+                transcription = asr_model.transcribe(
+                    [audio_denoised], 
+                    batch_size=1,
+                    verbose=False  # verbose 출력 비활성화
+                )
                 
                 if transcription and len(transcription) > 0:
                     # Hypothesis 객체에서 text 속성 추출
@@ -1185,11 +1332,69 @@ def save_dual_track_results(buffers, speaker_labels, call_info):
         import traceback
         traceback.print_exc()
 
+def check_mainbackend_health():
+    """MainBackend 연결 상태 확인"""
+    if not MAINBACKEND_ENABLED:
+        log("⚠️  MainBackend integration is disabled")
+        return False
+    
+    log(f"📡 Checking MainBackend connection...")
+    log(f"   URL: {MAINBACKEND_URL}")
+    
+    try:
+        # health 엔드포인트 확인
+        response = requests.get(
+            f'{MAINBACKEND_URL}/health',
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            log(f"✅ MainBackend is healthy")
+            log(f"   Service: {data.get('service', 'Unknown')}")
+            log(f"   Mode: {data.get('mode', 'Unknown')}")
+            
+            # 각 에이전트 상태 표시
+            agents = data.get('agents', {})
+            if agents:
+                log(f"   Connected Agents:")
+                for agent_key, agent_status in agents.items():
+                    status_icon = '✅' if agent_status.get('ok') else '❌'
+                    agent_name = agent_status.get('agent', agent_key)
+                    log(f"     {status_icon} {agent_name}")
+            
+            return True
+        else:
+            log(f"❌ MainBackend responded with status {response.status_code}")
+            return False
+            
+    except requests.exceptions.ConnectionError:
+        log(f"❌ Cannot connect to MainBackend")
+        log(f"   Please check if MainBackend is running on {MAINBACKEND_URL}")
+        log(f"   Tip: MainBackend should listen on 0.0.0.0 for WSL access")
+        return False
+    except requests.exceptions.Timeout:
+        log(f"⏱️  MainBackend health check timeout (>5s)")
+        return False
+    except Exception as e:
+        log(f"❌ MainBackend health check failed: {e}")
+        return False
+
 if __name__ == '__main__':
     # 모델 로드
     load_models()
     
+    # MainBackend 연결 확인
+    print("\n" + "="*50)
+    mainbackend_ok = check_mainbackend_health()
+    print("="*50 + "\n")
+    
+    if not mainbackend_ok and MAINBACKEND_ENABLED:
+        log("⚠️  Warning: MainBackend is not reachable")
+        log("   STT will continue, but transcriptions won't be forwarded")
+        log("   You can disable MainBackend by setting MAINBACKEND_ENABLED=false\n")
+    
     # 서버 시작
-    log("Starting server...")
+    log("Starting STT server...")
     log(f"Server will listen on port {HTTP_SERVER_PORT}")
     app.run(host='0.0.0.0', port=HTTP_SERVER_PORT, debug=True, use_reloader=False)

@@ -19,10 +19,10 @@ module.exports = {
       }
     },
     stt: {
-      name: 'STT Module (Temp)',
-      url: process.env.STT_AGENT_URL || 'http://localhost:8080',
+      name: 'STT Module',
+      url: process.env.STT_AGENT_URL || 'http://localhost:5000',
       enabled: true,
-      description: '실시간 음성→텍스트 변환 (Mock Server)',
+      description: '실시간 음성→텍스트 변환',
       timeout: 5000,
       endpoints: {
         health: '/health',

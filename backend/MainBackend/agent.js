@@ -253,6 +253,32 @@ app.post('/api/stt/line', async (req, res) => {
   res.json({ success: true });
 });
 
+/**
+ * POST /api/stt/call-end
+ * End Call Notification (STT Module Trigger)
+ */
+app.post('/api/stt/call-end', (req, res) => {
+  const { callId, status } = req.body;
+
+  if (!ACTIVE_CALL) {
+    return res.status(400).json({ error: 'No active call' });
+  }
+
+  // 통화 종료 처리
+  ACTIVE_CALL.status = status || 'ended';
+  ACTIVE_CALL.endTime = new Date().toISOString();
+
+  // 최종 상담 기록 저장
+  saveConsultation(ACTIVE_CALL);
+
+  console.log(`[STT] Call Ended: ${ACTIVE_CALL.callId} (${ACTIVE_CALL.customer['이름']}) - ${ACTIVE_CALL.messages.length} messages`);
+
+  const endedCall = { ...ACTIVE_CALL };
+  ACTIVE_CALL = null; // 통화 종료 후 초기화
+
+  res.json({ success: true, call: endedCall });
+});
+
 // Legacy support for existing test (if any)
 app.post('/stt/incoming-call', (req, res) => {
   req.body.phoneNumber = req.body.phone_number;
@@ -1332,9 +1358,10 @@ app.use((err, req, res, next) => {
 /**
  * 서버 시작
  */
-app.listen(PORT, async () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log('\n=== AiDam Main Backend (Orchestrator) Started ===');
   console.log(`Server: http://localhost:${PORT}`);
+  console.log(`Server (All interfaces): http://0.0.0.0:${PORT}`);
   console.log(`Mode: Orchestrator (API Gateway)`);
   console.log(`Reports Directory: ${REPORTS_DIR}`);
   console.log('\n📡 Checking Agent Status...');

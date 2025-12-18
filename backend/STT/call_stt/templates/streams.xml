@@ -2,7 +2,7 @@
 <Response>
   <!-- 양방향 오디오 스트리밍 시작 -->
   <Start>
-    <Stream url="{{ WebsocketUrl }}" track="both_tracks">
+    <Stream url="wss://unvulnerable-ember-caritative.ngrok-free.dev/stream" track="both_tracks">
       <Parameter name="From" value="{{ From }}" />
       <Parameter name="To" value="{{ To }}" />
       <Parameter name="CallSid" value="{{ CallSid }}" />
