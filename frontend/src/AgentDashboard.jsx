@@ -23,6 +23,7 @@ export default function AgentDashboard() {
   const [isMuted, setIsMuted] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState('intent') // 'intent', 'report'
+  const [regenerating, setRegenerating] = useState(false)
 
   // 고객 정보 (Backend Integration)
   const [customerInfo, setCustomerInfo] = useState(null)
@@ -291,19 +292,26 @@ export default function AgentDashboard() {
     }
 
     setProcessing(true)
+    setRegenerating(currentReport !== null)
     setProcessingStep(0)
     setProcessingMessage('보고서 생성을 준비하고 있습니다...')
     setRightPanelTab('report')
 
     try {
+      // 재생성 카운트 계산
+      const regenerationCount = currentReport?.regeneration_count || 0
+      const isRegeneration = currentReport !== null
+
       const response = await fetch(`${API_URL}/process`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: messages,
           metadata: {
-            source: 'auto_analysis',
+            source: isRegeneration ? 'regeneration' : 'auto_analysis',
             uploaded_at: new Date().toISOString(),
+            original_report_id: isRegeneration ? currentReport.reportId : null,
+            regeneration_count: isRegeneration ? regenerationCount + 1 : 0,
             // Capture UI Snapshot for Report Detail View
             ui_snapshot: {
               recommendedPlans: recommendedPlans,
@@ -348,7 +356,10 @@ export default function AgentDashboard() {
 
               if (data.step === 5 && data.data) {
                 const result = data.data
-                setCurrentReport(result)
+                setCurrentReport({
+                  ...result,
+                  regeneration_count: result.regeneration_count || 0
+                })
                 setSelectedReportId(result.reportId)
                 await loadReports()
               }
@@ -360,11 +371,13 @@ export default function AgentDashboard() {
       }
 
       setProcessing(false)
+      setRegenerating(false)
     } catch (err) {
       console.error('Process error:', err)
       const errorMessage = err.message || '보고서 생성 중 오류가 발생했습니다.'
       alert(`❌ 오류 발생\n\n${errorMessage}\n\n백엔드 서버가 실행 중인지 확인해주세요.`)
       setProcessing(false)
+      setRegenerating(false)
       setProcessingStep(0)
       setProcessingMessage('')
     }
@@ -383,7 +396,8 @@ export default function AgentDashboard() {
           created_at: data.report.created_at,
           // Load Snapshot
           ui_snapshot: data.report.ui_snapshot,
-          customer_phone: data.report.customer_phone
+          customer_phone: data.report.customer_phone,
+          regeneration_count: data.report.regeneration_count || 0
         })
         setMessages(data.report.messages || [])
         setSelectedReportId(reportId)
@@ -1038,6 +1052,23 @@ export default function AgentDashboard() {
                             {currentReport.report}
                           </ReactMarkdown>
                         </div>
+                        
+                        {/* 보고서 재생성 버튼 */}
+                        <div className="report-actions-footer">
+                          <button 
+                            onClick={handleProcess} 
+                            className="regenerate-report-btn"
+                            disabled={regenerating || processing}
+                          >
+                            <span className="material-icons-outlined">refresh</span>
+                            {regenerating ? '재생성 중...' : '보고서 재생성'}
+                          </button>
+                          {currentReport.regeneration_count > 0 && (
+                            <span className="regeneration-badge">
+                              {currentReport.regeneration_count}회 재생성됨
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -1070,28 +1101,57 @@ export default function AgentDashboard() {
                     <div key={report.id} className="report-item">
                       <div className="report-header-row">
                         <div className="report-info">
-                          <h3>{report.id}</h3>
-                          <span className="report-date">{new Date(report.timestamp).toLocaleString('ko-KR')}</span>
+                          <div className="report-title-row">
+                            {report.customer_name && (
+                              <h3 className="customer-name-title">{report.customer_name}</h3>
+                            )}
+                            {report.customer_phone && (
+                              <span className="customer-phone-badge">{report.customer_phone}</span>
+                            )}
+                          </div>
+                          <span className="report-date">
+                            <span className="material-icons-outlined">schedule</span>
+                            {new Date(report.created_at).toLocaleString('ko-KR', {
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </span>
+                          <span className="report-id-small">ID: {report.id}</span>
                         </div>
                         <div className="report-actions">
                           <button
                             onClick={() => viewReport(report.id)}
                             className="view-btn"
                           >
+                            <span className="material-icons-outlined">visibility</span>
                             보기
                           </button>
                           <button
                             onClick={(e) => deleteReport(report.id, e)}
                             className="delete-btn"
                           >
+                            <span className="material-icons-outlined">delete</span>
                             삭제
                           </button>
                         </div>
                       </div>
-                      {report.analysis && (
+                      {report.summary && (
                         <div className="report-preview">
-                          <span className="preview-label">주요 토픽:</span>
-                          <span className="preview-text">{report.analysis.main_topics?.join(', ')}</span>
+                          <span className="preview-label">
+                            <span className="material-icons-outlined">summarize</span>
+                            요약:
+                          </span>
+                          <span className="preview-text">{report.summary}</span>
+                        </div>
+                      )}
+                      {report.topics && report.topics.length > 0 && (
+                        <div className="report-topics">
+                          {report.topics.map((topic, i) => (
+                            <span key={i} className="topic-badge">{topic}</span>
+                          ))}
                         </div>
                       )}
                     </div>

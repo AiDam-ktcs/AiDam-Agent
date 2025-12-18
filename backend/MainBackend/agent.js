@@ -340,9 +340,12 @@ async function triggerReportGeneration(callData) {
       callId: callData.callId,
       created_at: report.created_at,
       customer_phone: callData.customer['번호'],
+      customer_name: callData.customer['이름'],
       analysis: analysisResult.analysis,
       content: report.content,
-      format: 'markdown'
+      format: 'markdown',
+      regeneration_count: metadata?.regeneration_count || 0,
+      original_report_id: metadata?.original_report_id || null
     };
 
     const reportPath = path.join(REPORTS_DIR, `${report.id}.json`);
@@ -647,7 +650,8 @@ app.post('/generate-report', async (req, res) => {
         created_at: result.report.created_at,
         analysis,
         content: result.report.content,
-        format
+        format,
+        regeneration_count: 0
       };
 
       const reportPath = path.join(REPORTS_DIR, `${result.report.id}.json`);
@@ -700,6 +704,10 @@ app.post('/process', async (req, res) => {
 
             // 최종 결과에서 보고서 저장
             if (eventData.data && eventData.data.success && eventData.data.reportId) {
+              // Extract customer info from active call if available
+              const customerName = ACTIVE_CALL?.customer?.['이름'] || eventData.data.customer_name || 'Unknown';
+              const customerPhone = ACTIVE_CALL?.customer?.['번호'] || eventData.data.customer_phone || 'Unknown';
+              
               const reportData = {
                 id: eventData.data.reportId,
                 created_at: eventData.data.created_at,
@@ -707,8 +715,11 @@ app.post('/process', async (req, res) => {
                 content: eventData.data.report,
                 format: 'markdown',
                 messages: messages,
-                customer_phone: eventData.data.customer_phone,
-                ui_snapshot: metadata?.ui_snapshot || null // Save UI Snapshot
+                customer_phone: customerPhone,
+                customer_name: customerName,
+                ui_snapshot: metadata?.ui_snapshot || null, // Save UI Snapshot
+                regeneration_count: metadata?.regeneration_count || 0,
+                original_report_id: metadata?.original_report_id || null
               };
 
               const reportPath = path.join(REPORTS_DIR, `${eventData.data.reportId}.json`);
@@ -774,7 +785,9 @@ app.get('/reports', (req, res) => {
             created_at: data.created_at,
             summary: data.analysis?.summary || 'No summary',
             topics: data.analysis?.main_topics || [],
-            customer_phone: data.customer_phone
+            customer_phone: data.customer_phone,
+            customer_name: data.customer_name,
+            regeneration_count: data.regeneration_count || 0
           };
         } catch (err) {
           console.error(`Error reading report ${f}:`, err);
