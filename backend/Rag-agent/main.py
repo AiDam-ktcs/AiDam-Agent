@@ -286,6 +286,26 @@ async def on_message_event(event: MessageEvent):
         return {"status": "error", "message": str(e)}
 
 
+@app.post("/event/call-end")
+async def on_call_end(request: Dict[str, Any]):
+    """
+    통화 종료 알림 수신 (MainBackend로부터)
+    - 필요 시 통화 종료 후 정리 작업 수행
+    """
+    call_id = request.get("callId", "unknown")
+    message_count = request.get("messageCount", 0)
+    customer_name = request.get("customer", {}).get("이름", "Unknown")
+    
+    print(f"[RAG] Call ended: {call_id} ({customer_name}) - {message_count} messages")
+    print(f"[RAG] Cleanup completed for call: {call_id}")
+    
+    return {
+        "status": "acknowledged",
+        "callId": call_id,
+        "service": "RAG Agent"
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     import asyncio

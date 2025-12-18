@@ -254,10 +254,57 @@ app.post('/api/stt/line', async (req, res) => {
 });
 
 /**
+ * 통화 종료 시 에이전트들에게 알림 전송 (Fire-and-Forget)
+ */
+async function notifyCallEnd(callData) {
+  const payload = {
+    callId: callData.callId,
+    status: callData.status,
+    endTime: callData.endTime,
+    messageCount: callData.messages?.length || 0,
+    customer: callData.customer
+  };
+
+  // RAG Agent 알림
+  try {
+    const ragAgent = agentsConfig.getAgent('rag');
+    if (ragAgent && ragAgent.enabled) {
+      const url = `${ragAgent.url}/event/call-end`;
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        timeout: 3000
+      }).catch(err => console.log(`[System] RAG Agent call-end notification failed: ${err.message}`));
+    }
+  } catch (e) {
+    console.log(`[System] Failed to notify RAG Agent: ${e.message}`);
+  }
+
+  // Upsell Agent 알림
+  try {
+    const upsellAgent = agentsConfig.getAgent('upsell');
+    if (upsellAgent && upsellAgent.enabled) {
+      const url = `${upsellAgent.url}/event/call-end`;
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        timeout: 3000
+      }).catch(err => console.log(`[System] Upsell Agent call-end notification failed: ${err.message}`));
+    }
+  } catch (e) {
+    console.log(`[System] Failed to notify Upsell Agent: ${e.message}`);
+  }
+
+  console.log(`[System] Call-end notifications sent to agents`);
+}
+
+/**
  * POST /api/stt/call-end
  * End Call Notification (STT Module Trigger)
  */
-app.post('/api/stt/call-end', (req, res) => {
+app.post('/api/stt/call-end', async (req, res) => {
   const { callId, status } = req.body;
 
   if (!ACTIVE_CALL) {
@@ -274,16 +321,22 @@ app.post('/api/stt/call-end', (req, res) => {
   console.log(`[STT] Call Ended: ${ACTIVE_CALL.callId} (${ACTIVE_CALL.customer['이름']}) - ${ACTIVE_CALL.messages.length} messages`);
 
   const endedCall = { ...ACTIVE_CALL };
+  
+  // 에이전트들에게 알림 (비동기)
+  notifyCallEnd(endedCall);
+
   ACTIVE_CALL = null; // 통화 종료 후 초기화
 
   res.json({ success: true, call: endedCall });
 });
 
-// Legacy support for existing test (if any)
+// Legacy endpoint - DEPRECATED (사용하지 마세요, /api/stt/call-start 사용)
+// 하위 호환성을 위해 유지하되, /api/stt/call-start로 리다이렉트
 app.post('/stt/incoming-call', (req, res) => {
-  req.body.phoneNumber = req.body.phone_number;
-  const { phone_number } = req.body;
-  if (!phone_number) return res.status(400).json({ error: 'phone_number required' });
+  console.warn('[Deprecated] /stt/incoming-call is deprecated. Use /api/stt/call-start instead.');
+  
+  const phone_number = req.body.phoneNumber || req.body.phone_number;
+  if (!phone_number) return res.status(400).json({ error: 'phone_number or phoneNumber required' });
 
   const customer = CUSTOMERS.find(c => c['번호'] === phone_number);
 
@@ -293,12 +346,14 @@ app.post('/stt/incoming-call', (req, res) => {
     customer: customer || { '이름': 'Unknown', '번호': phone_number },
     startTime: new Date().toISOString(),
     messages: [],
-    ragResults: [] // RAG 자동 생성 결과
+    upsellAnalysis: null,
+    upsellAnalysisHistory: [],
+    ragResults: []
   };
 
   saveConsultation(ACTIVE_CALL);
 
-  console.log(`[Sim] Call active: ${phone_number}`);
+  console.log(`[Sim] Call started: ${phone_number} (${ACTIVE_CALL.customer['이름']})`);
   res.json({ success: true, call: ACTIVE_CALL });
 });
 
@@ -414,10 +469,10 @@ async function triggerReportGeneration(callData) {
 }
 
 /**
- * POST /item/call/end
- * End current call
+ * POST /call/end
+ * End current call (Frontend trigger)
  */
-app.post('/call/end', (req, res) => {
+app.post('/call/end', async (req, res) => {
   if (ACTIVE_CALL) {
     console.log(`[Call] Ended call with ${ACTIVE_CALL.customer['번호']}`);
     ACTIVE_CALL.status = 'completed';
@@ -425,6 +480,11 @@ app.post('/call/end', (req, res) => {
 
     // Save final state
     saveConsultation(ACTIVE_CALL);
+
+    const endedCall = { ...ACTIVE_CALL };
+    
+    // 에이전트들에게 알림 (비동기)
+    notifyCallEnd(endedCall);
 
     // Trigger Report Generation (Background) - REMOVED per user request
     // triggerReportGeneration(ACTIVE_CALL);

@@ -354,11 +354,27 @@ export default function AgentDashboard() {
         })
       }
 
+      // 4. End Call Automatically after simulation
+      console.log('[Simulation] All messages sent, ending call...')
+      await new Promise(r => setTimeout(r, 1500)) // 마지막 메시지 처리 대기
+
+      const endResp = await fetch(`${API_URL}/call/end`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      })
+
+      if (endResp.ok) {
+        console.log('[Simulation] Call ended successfully')
+        // 통화 종료 후 상태 업데이트
+        await pollCallStatus()
+      }
+
     } catch (err) {
       console.error('Simulation failed:', err)
       alert(`시뮬레이션 중 오류가 발생했습니다: ${err.message}`)
     } finally {
       setIsSimulating(false)
+      console.log(`[Simulation] Completed - ${sampleMessages.length} messages sent`)
     }
   }
 
