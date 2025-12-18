@@ -52,13 +52,54 @@
   font-size: 14px;
 }
 
+/* Tag Chips Wrapper */
+.tag-chips-wrapper {
+  position: relative;
+  background: var(--bg-light);
+  padding-bottom: 0.75rem;
+}
+
+.tag-chips-wrapper.collapsed .tag-chips {
+  max-height: 2.5rem;
+  overflow: hidden;
+}
+
+.tag-chips-wrapper.expanded .tag-chips {
+  max-height: none;
+}
+
+.keywords-toggle-btn {
+  position: absolute;
+  right: 0.5rem;
+  top: 0.65rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.keywords-toggle-btn:hover {
+  background: var(--bg-light);
+}
+
+.keywords-toggle-btn .material-icons-outlined {
+  font-size: 16px;
+  color: var(--text-secondary);
+}
+
 /* Tag Chips */
 .tag-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--border-color);
+  padding-right: 2.5rem;
   background: var(--bg-light);
 }
 
@@ -300,6 +341,38 @@
   max-height: 200px;
   overflow-y: auto;
   box-shadow: var(--shadow-sm);
+}
+
+/* Manual Box - 항상 표시되는 매뉴얼 박스 */
+.manual-box {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  border-left: 3px solid var(--primary);
+}
+
+.manual-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.manual-header .material-icons-outlined {
+  font-size: 16px;
+}
+
+.manual-content {
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  max-height: 150px;
+  overflow-y: auto;
 }
 
 /* Loading State */

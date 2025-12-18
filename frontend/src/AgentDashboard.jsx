@@ -18,6 +18,7 @@ export default function AgentDashboard() {
   const [selectedReportId, setSelectedReportId] = useState(null)
   const [autoAnalyze, setAutoAnalyze] = useState(true)
   const [callStatus, setCallStatus] = useState('active') // 'idle', 'ringing', 'active', 'ended'
+  const [currentCallId, setCurrentCallId] = useState(null) // 현재 통화 ID (고객 변경 감지용)
   const [currentPhoneNumber, setCurrentPhoneNumber] = useState('010-1111-2222')
   const [rightPanelTab, setRightPanelTab] = useState('intent') // 'intent', 'report'
   const [regenerating, setRegenerating] = useState(false)
@@ -37,6 +38,7 @@ export default function AgentDashboard() {
 
   // RAG Scripts State (Lifted from RAGAssistant)
   const [ragScripts, setRagScripts] = useState([])
+  const [isRagCleared, setIsRagCleared] = useState(false) // 초기화 상태 추적
 
   // 선택된 요금제에 대한 추천 스크립트
   const [planScript, setPlanScript] = useState('')
@@ -910,6 +912,10 @@ export default function AgentDashboard() {
                 triggerMessage={triggerMessage}
                 ragScripts={ragScripts}
                 setRagScripts={setRagScripts}
+                onClear={() => {
+                  setMessages([])
+                  setIsRagCleared(true)
+                }}
               />
             </section>
 
