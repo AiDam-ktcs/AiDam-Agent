@@ -26,6 +26,7 @@ if (!fs.existsSync(CONSULTATIONS_DIR)) {
 let CUSTOMERS = [];
 let PRICING_PLANS = {};
 let ACTIVE_CALL = null; // { customer: {}, startTime: ... }
+let LAST_ENDED_CALL = null; // 최근 종료된 통화 (분석 결과 수신을 위해 유지)
 
 // Save Consultation Helper
 function saveConsultation(call) {
@@ -152,6 +153,9 @@ app.post('/api/stt/call-start', (req, res) => {
   // Find Customer
   const customer = CUSTOMERS.find(c => c['번호'] === phoneNumber);
 
+  // 새 통화 시작 시 이전 종료 통화 정리
+  LAST_ENDED_CALL = null;
+
   ACTIVE_CALL = {
     callId: callId || `call-${Date.now()}`,
     status: 'active', // 바로 active로 설정 (STT가 시작되었으므로)
@@ -265,7 +269,7 @@ async function notifyCallEnd(callData) {
     customer: callData.customer
   };
 
-  // RAG Agent 알림
+  // RAG Agent 알림 (Upsell Agent는 분석 중 문제 발생 가능성으로 제외)
   try {
     const ragAgent = agentsConfig.getAgent('rag');
     if (ragAgent && ragAgent.enabled) {
@@ -276,28 +280,11 @@ async function notifyCallEnd(callData) {
         body: JSON.stringify(payload),
         timeout: 3000
       }).catch(err => console.log(`[System] RAG Agent call-end notification failed: ${err.message}`));
+      console.log(`[System] Call-end notification sent to RAG Agent`);
     }
   } catch (e) {
     console.log(`[System] Failed to notify RAG Agent: ${e.message}`);
   }
-
-  // Upsell Agent 알림
-  try {
-    const upsellAgent = agentsConfig.getAgent('upsell');
-    if (upsellAgent && upsellAgent.enabled) {
-      const url = `${upsellAgent.url}/event/call-end`;
-      await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        timeout: 3000
-      }).catch(err => console.log(`[System] Upsell Agent call-end notification failed: ${err.message}`));
-    }
-  } catch (e) {
-    console.log(`[System] Failed to notify Upsell Agent: ${e.message}`);
-  }
-
-  console.log(`[System] Call-end notifications sent to agents`);
 }
 
 /**
@@ -325,6 +312,8 @@ app.post('/api/stt/call-end', async (req, res) => {
   // 에이전트들에게 알림 (비동기)
   notifyCallEnd(endedCall);
 
+  // 최근 종료 통화로 이동 (분석 결과가 늦게 도착할 수 있음)
+  LAST_ENDED_CALL = endedCall;
   ACTIVE_CALL = null; // 통화 종료 후 초기화
 
   res.json({ success: true, call: endedCall });
@@ -339,6 +328,9 @@ app.post('/stt/incoming-call', (req, res) => {
   if (!phone_number) return res.status(400).json({ error: 'phone_number or phoneNumber required' });
 
   const customer = CUSTOMERS.find(c => c['번호'] === phone_number);
+
+  // 새 통화 시작 시 이전 종료 통화 정리
+  LAST_ENDED_CALL = null;
 
   ACTIVE_CALL = {
     callId: `sim-${Date.now()}`,
@@ -367,6 +359,9 @@ app.post('/call/outbound', (req, res) => {
 
   const customer = CUSTOMERS.find(c => c['번호'] === phone_number);
 
+  // 새 통화 시작 시 이전 종료 통화 정리
+  LAST_ENDED_CALL = null;
+
   ACTIVE_CALL = {
     callId: `out-${Date.now()}`,
     status: 'dialing',
@@ -385,17 +380,41 @@ app.post('/call/outbound', (req, res) => {
 /**
  * GET /active-call
  * Get current active call status
+ * 통화 종료 후에도 LAST_ENDED_CALL을 반환 (분석 결과 업데이트를 위해)
  */
 app.get('/active-call', (req, res) => {
-  res.json({
-    active: !!ACTIVE_CALL,
-    call: ACTIVE_CALL ? {
-      ...ACTIVE_CALL,
-      // Agent 결과 포함
-      ragResults: ACTIVE_CALL.ragResults || [],
-      upsellAnalysisHistory: ACTIVE_CALL.upsellAnalysisHistory || [], // [NEW]
-      latestIntent: ACTIVE_CALL.latestIntent || null
-    } : null
+  // 활성 통화가 있으면 반환
+  if (ACTIVE_CALL) {
+    return res.json({
+      active: true,
+      call: {
+        ...ACTIVE_CALL,
+        // Agent 결과 포함
+        ragResults: ACTIVE_CALL.ragResults || [],
+        upsellAnalysisHistory: ACTIVE_CALL.upsellAnalysisHistory || [],
+        latestIntent: ACTIVE_CALL.latestIntent || null
+      }
+    });
+  }
+
+  // 활성 통화가 없지만 최근 종료된 통화가 있으면 반환 (status가 'ended'/'completed'임을 확인)
+  if (LAST_ENDED_CALL) {
+    return res.json({
+      active: false,
+      call: {
+        ...LAST_ENDED_CALL,
+        // Agent 결과 포함 (통화 종료 후에도 업데이트 가능)
+        ragResults: LAST_ENDED_CALL.ragResults || [],
+        upsellAnalysisHistory: LAST_ENDED_CALL.upsellAnalysisHistory || [],
+        latestIntent: LAST_ENDED_CALL.latestIntent || null
+      }
+    });
+  }
+
+  // 아무 통화도 없음
+  return res.json({
+    active: false,
+    call: null
   });
 });
 
@@ -489,6 +508,8 @@ app.post('/call/end', async (req, res) => {
     // Trigger Report Generation (Background) - REMOVED per user request
     // triggerReportGeneration(ACTIVE_CALL);
 
+    // 최근 종료 통화로 이동 (분석 결과가 늦게 도착할 수 있음)
+    LAST_ENDED_CALL = endedCall;
     ACTIVE_CALL = null;
   }
   res.json({ success: true });
@@ -1303,38 +1324,54 @@ app.post('/upsell/intent-only', async (req, res) => {
 app.post('/internal/upsell-result', (req, res) => {
   const { callId, analysisResult } = req.body;
 
-  if (!ACTIVE_CALL || ACTIVE_CALL.callId !== callId) {
-    // 활성 콜이 아니거나 종료된 콜일 수 있음
-    console.warn(`[Orchestrator] Received upsell result for inactive call: ${callId}`);
-    return res.json({ success: false, reason: 'inactive_call' });
+  // 활성 통화 또는 최근 종료된 통화 찾기
+  let targetCall = null;
+  let isActiveCall = false;
+
+  if (ACTIVE_CALL && ACTIVE_CALL.callId === callId) {
+    targetCall = ACTIVE_CALL;
+    isActiveCall = true;
+  } else if (LAST_ENDED_CALL && LAST_ENDED_CALL.callId === callId) {
+    targetCall = LAST_ENDED_CALL;
+    isActiveCall = false;
+    console.log(`[Orchestrator] Processing late upsell result for ended call: ${callId}`);
+  } else {
+    // 완전히 다른 통화이거나 너무 오래된 통화
+    console.log(`[Orchestrator] Received upsell result for unknown call: ${callId} - ignoring`);
+    return res.json({ success: true, reason: 'unknown_call', saved: false });
   }
 
-  console.log(`[Orchestrator] Received Upsell Analysis for ${callId} (Msg: ${analysisResult.messageId || 'unknown'})`);
+  console.log(`[Orchestrator] Received Upsell Analysis for ${callId} (Msg: ${analysisResult.messageId || 'unknown'}) - ${isActiveCall ? 'active' : 'ended'}`);
 
-  // 활성 콜 상태 업데이트 (Latest)
-  ACTIVE_CALL.upsellAnalysis = analysisResult;
+  // 통화 상태 업데이트 (Latest)
+  targetCall.upsellAnalysis = analysisResult;
 
   // [NEW] History에 추가 (메시지 ID 기준)
-  if (!ACTIVE_CALL.upsellAnalysisHistory) {
-    ACTIVE_CALL.upsellAnalysisHistory = [];
+  if (!targetCall.upsellAnalysisHistory) {
+    targetCall.upsellAnalysisHistory = [];
   }
 
   // 중복 방지 (messageId가 있는 경우)
   if (analysisResult.messageId) {
-    const exists = ACTIVE_CALL.upsellAnalysisHistory.find(a => a.messageId === analysisResult.messageId);
+    const exists = targetCall.upsellAnalysisHistory.find(a => a.messageId === analysisResult.messageId);
     if (!exists) {
-      ACTIVE_CALL.upsellAnalysisHistory.push(analysisResult);
+      targetCall.upsellAnalysisHistory.push(analysisResult);
     } else {
-      // 이미 있으면 업데이트?
-      const idx = ACTIVE_CALL.upsellAnalysisHistory.findIndex(a => a.messageId === analysisResult.messageId);
-      ACTIVE_CALL.upsellAnalysisHistory[idx] = analysisResult;
+      // 이미 있으면 업데이트
+      const idx = targetCall.upsellAnalysisHistory.findIndex(a => a.messageId === analysisResult.messageId);
+      targetCall.upsellAnalysisHistory[idx] = analysisResult;
     }
   } else {
     // messageId가 없으면 그냥 추가 (Fallback)
-    ACTIVE_CALL.upsellAnalysisHistory.push(analysisResult);
+    targetCall.upsellAnalysisHistory.push(analysisResult);
   }
 
-  res.json({ success: true });
+  // 종료된 통화인 경우 파일에 저장
+  if (!isActiveCall) {
+    saveConsultation(targetCall);
+  }
+
+  res.json({ success: true, saved: true });
 });
 
 /**
@@ -1344,9 +1381,21 @@ app.post('/internal/upsell-result', (req, res) => {
 app.post('/internal/rag-result', (req, res) => {
   const { callId, result } = req.body;
 
-  if (!ACTIVE_CALL || ACTIVE_CALL.callId !== callId) {
-    console.warn(`[Orchestrator] Received RAG result for inactive call: ${callId}`);
-    return res.json({ success: false, reason: 'inactive_call' });
+  // 활성 통화 또는 최근 종료된 통화 찾기
+  let targetCall = null;
+  let isActiveCall = false;
+
+  if (ACTIVE_CALL && ACTIVE_CALL.callId === callId) {
+    targetCall = ACTIVE_CALL;
+    isActiveCall = true;
+  } else if (LAST_ENDED_CALL && LAST_ENDED_CALL.callId === callId) {
+    targetCall = LAST_ENDED_CALL;
+    isActiveCall = false;
+    console.log(`[Orchestrator] Processing late RAG result for ended call: ${callId}`);
+  } else {
+    // 완전히 다른 통화이거나 너무 오래된 통화
+    console.log(`[Orchestrator] Received RAG result for unknown call: ${callId} - ignoring`);
+    return res.json({ success: true, reason: 'unknown_call', saved: false });
   }
 
   // 스킵된 경우 저장하지 않음
@@ -1355,11 +1404,11 @@ app.post('/internal/rag-result', (req, res) => {
     return res.json({ success: true, skipped: true });
   }
 
-  console.log(`[Orchestrator] Received RAG Result for ${callId}`);
+  console.log(`[Orchestrator] Received RAG Result for ${callId} - ${isActiveCall ? 'active' : 'ended'}`);
 
   // ragResults 배열 초기화 (없으면)
-  if (!ACTIVE_CALL.ragResults) {
-    ACTIVE_CALL.ragResults = [];
+  if (!targetCall.ragResults) {
+    targetCall.ragResults = [];
   }
 
   // 새 스크립트 추가
@@ -1372,9 +1421,14 @@ app.post('/internal/rag-result', (req, res) => {
     timestamp: new Date().toISOString()
   };
 
-  ACTIVE_CALL.ragResults.push(newScript);
+  targetCall.ragResults.push(newScript);
 
-  res.json({ success: true });
+  // 종료된 통화인 경우 파일에 저장
+  if (!isActiveCall) {
+    saveConsultation(targetCall);
+  }
+
+  res.json({ success: true, saved: true });
 });
 
 /**

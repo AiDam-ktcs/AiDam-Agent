@@ -123,12 +123,18 @@ export default function AgentDashboard() {
     try {
       const resp = await fetch(`${API_URL}/active-call`)
       const data = await resp.json()
-      if (data.active && data.call) {
+      
+      // 통화가 있는 경우 (활성 또는 종료 직후)
+      if (data.call) {
         const wasInactive = callStatus === 'idle' || callStatus === 'ended'
-        setCallStatus('active')
+        
+        // 통화 상태 업데이트
+        if (data.active) {
+          setCallStatus('active')
+        }
 
         // 새로운 통화가 시작되면 고객 분석 탭으로 전환 및 RAG 초기화
-        if (wasInactive) {
+        if (wasInactive && data.active) {
           setRightPanelTab('intent')
           setRagScripts([]) // 새 통화 시 RAG 결과 초기화
           setIsRagCleared(false) // 새 통화 시작 시 초기화 상태 해제
@@ -140,6 +146,9 @@ export default function AgentDashboard() {
           setSelectedAnalysisId(null)
           setUpsellHistory({})
           setAnalyzingMessages(new Set())
+          
+          // 새 통화 시작 시 자동 스크롤 활성화
+          shouldAutoScrollRef.current = true
         }
 
         setCustomerInfo({
@@ -193,6 +202,15 @@ export default function AgentDashboard() {
             if (item.messageId) historyMap[item.messageId] = item;
           });
           setUpsellHistory(historyMap);
+          
+          // 분석 완료된 메시지를 analyzingMessages에서 제거
+          setAnalyzingMessages(prev => {
+            const updated = new Set(prev);
+            Object.keys(historyMap).forEach(messageId => {
+              updated.delete(messageId);
+            });
+            return updated;
+          });
         }
 
         // Backend-driven Upsell Analysis Update (Latest)
@@ -204,9 +222,16 @@ export default function AgentDashboard() {
           updateRightPanel(result);
         } 
         */
-      } else if (callStatus === 'active') { // Call ended externally
+        
+        // 통화 종료 감지 (active: false이지만 call 데이터는 있음)
+        if (!data.active && callStatus === 'active') {
+          setCallStatus('ended')
+          // Auto-navigate to Report Tab
+          setRightPanelTab('report')
+        }
+      } else if (!data.call && callStatus === 'active') {
+        // Call 데이터도 없고 이전에 활성이었던 경우
         setCallStatus('ended')
-        // Auto-navigate to Report Tab
         setRightPanelTab('report')
       }
     } catch (err) {
@@ -227,11 +252,32 @@ export default function AgentDashboard() {
     }
   }, [callStatus])
 
-  // Auto-scroll to bottom of chat
+  // Auto-scroll to bottom of chat (only if already at bottom)
   const chatContainerRef = useRef(null)
+  const shouldAutoScrollRef = useRef(true) // Track if user is at bottom
+
+  // Check if user is near bottom (within 50px threshold)
+  const checkIfAtBottom = () => {
+    const container = chatContainerRef.current
+    if (!container) return true
+    
+    const threshold = 50
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+    return distanceFromBottom < threshold
+  }
+
+  // Handle scroll events to track user position
+  const handleScroll = () => {
+    shouldAutoScrollRef.current = checkIfAtBottom()
+  }
+
   useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight
+    const container = chatContainerRef.current
+    if (!container) return
+
+    // Only auto-scroll if user was at bottom before update
+    if (shouldAutoScrollRef.current) {
+      container.scrollTop = container.scrollHeight
     }
   }, [messages])
 
@@ -333,6 +379,9 @@ export default function AgentDashboard() {
 
       // 새로운 통화 시작 시 고객 분석 탭으로 전환
       setRightPanelTab('intent')
+      
+      // 시뮬레이션 시작 시 자동 스크롤 활성화
+      shouldAutoScrollRef.current = true
 
       // Refresh UI immediately to show Customer Info
       await pollCallStatus()
@@ -872,7 +921,7 @@ export default function AgentDashboard() {
                     </div>
                   </div>
                 ) : (
-                  <div className="chat-messages" ref={chatContainerRef}>
+                  <div className="chat-messages" ref={chatContainerRef} onScroll={handleScroll}>
                     {messages.map((msg, idx) => {
                       const analysis = msg.messageId ? upsellHistory[msg.messageId] : null;
                       const isSelected = selectedAnalysisId === msg.messageId;
