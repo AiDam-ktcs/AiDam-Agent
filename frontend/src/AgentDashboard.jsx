@@ -60,62 +60,43 @@ export default function AgentDashboard() {
         })
         setCurrentPhoneNumber(data.call.customer['번호'])
         if (view === 'main' && data.call.messages) {
-          setMessages(data.call.messages.map(m => ({
+          const newMessages = data.call.messages.map(m => ({
             role: m.role,
             content: m.content,
-            keywords: m.keywords
-          })))
+            keywords: m.keywords,
+            messageId: m.messageId
+          }));
+          setMessages(newMessages);
+
+          // [NEW] Mark user messages as analyzing if they don't have analysis yet
+          newMessages.forEach(msg => {
+            if (msg.role === 'user' && msg.messageId && !upsellHistory[msg.messageId]) {
+              setAnalyzingMessages(prev => new Set(prev).add(msg.messageId));
+            }
+          });
         }
 
         // Backend-driven RAG Results Update
         if (data.call.ragResults && data.call.ragResults.length > 0) {
-          // 새로운 결과만 추가 (기존 것과 비교)
           if (data.call.ragResults.length !== ragScripts.length) {
             setRagScripts(data.call.ragResults)
           }
         }
 
-        // Backend-driven Upsell Analysis Update
-        if (data.call.upsellAnalysis) {
+        // [NEW] Process Upsell Analysis History
+        if (data.call.upsellAnalysisHistory) {
+          const historyMap = {};
+          data.call.upsellAnalysisHistory.forEach(item => {
+            if (item.messageId) historyMap[item.messageId] = item;
+          });
+          setUpsellHistory(historyMap);
+        }
+
+        // Backend-driven Upsell Analysis Update (Latest)
+        // Only update if we are NOT viewing a specific historical message
+        if (data.call.upsellAnalysis && selectedAnalysisId === null) {
           const result = data.call.upsellAnalysis;
-
-          // Update Intent logic
-          if (result.customer_intent) {
-            setCustomerIntent(result.customer_intent);
-          }
-
-          // Update Reasoning logic
-          // Update Reasoning logic
-          if (result.reasoning_steps && result.reasoning_steps.length > 0) {
-            setAiReasoning(result.reasoning_steps);
-          } else if (result.upsell_reason) {
-            setAiReasoning([result.upsell_reason]);
-          } else if (result.intent_description) {
-            // Format description as reasoning step
-            setAiReasoning([result.intent_description]);
-          }
-
-          // Update Recommended Plans logic
-          if (result.recommended_plans && result.recommended_plans.length > 0) {
-            const plans = result.recommended_plans.map((plan, idx) => ({
-              id: idx,
-              name: plan.plan_name,
-              price: plan.monthly_fee.toLocaleString(),
-              rawPrice: plan.monthly_fee,
-              data: plan.data_limit,
-              selected: false
-            }));
-            // avoid re-rendering loop or state overwrite if same?
-            // Simple implementation: overwrite if different length or force update
-            // better to check deep equality but for now overwrite is safe enough 
-            // as we poll every 2sec.
-            // Ideally check if plans changed.
-            // JSON stringify comparison:
-            // if (JSON.stringify(plans) !== JSON.stringify(recommendedPlans)) { setRecommendedPlans(plans); }
-            // Since we don't have deep access to prev state in polling function easily without ref,
-            // we will just set it. React handles atomic updates efficiently enough.
-            setRecommendedPlans(plans);
-          }
+          updateRightPanel(result);
         }
       } else if (callStatus === 'active') { // Call ended externally
         setCallStatus('ended')
@@ -131,7 +112,7 @@ export default function AgentDashboard() {
   useEffect(() => {
     const interval = setInterval(pollCallStatus, 2000)
     return () => clearInterval(interval)
-  }, [callStatus])
+  }, [callStatus, selectedAnalysisId, upsellHistory, view])
 
   // Auto-navigate Effect when manually ending call
   useEffect(() => {
@@ -139,6 +120,36 @@ export default function AgentDashboard() {
       setRightPanelTab('report')
     }
   }, [callStatus])
+
+  // [NEW] Helper to update Right Panel State
+  const updateRightPanel = (result) => {
+    // Update Intent logic
+    if (result.customer_intent) {
+      setCustomerIntent(result.customer_intent);
+    }
+
+    // Update Reasoning logic
+    if (result.reasoning_steps && result.reasoning_steps.length > 0) {
+      setAiReasoning(result.reasoning_steps);
+    } else if (result.upsell_reason) {
+      setAiReasoning([result.upsell_reason]);
+    } else if (result.intent_description) {
+      setAiReasoning([result.intent_description]);
+    }
+
+    // Update Recommended Plans logic
+    if (result.recommended_plans && result.recommended_plans.length > 0) {
+      const plans = result.recommended_plans.map((plan, idx) => ({
+        id: idx,
+        name: plan.plan_name,
+        price: plan.monthly_fee.toLocaleString(),
+        rawPrice: plan.monthly_fee,
+        data: plan.data_limit,
+        selected: false
+      }));
+      setRecommendedPlans(plans);
+    }
+  }
 
   // 추천 요금제 (AI가 분석해서 제공)
   const [recommendedPlans, setRecommendedPlans] = useState([])
@@ -156,6 +167,29 @@ export default function AgentDashboard() {
 
   // 고객 의중 (AI 분석 결과)
   const [customerIntent, setCustomerIntent] = useState('대화 내용 분석 대기 중...')
+
+  // [NEW] Upsell Analysis History & Selection
+  const [upsellHistory, setUpsellHistory] = useState({}); // { messageId: AnalysisResult }
+  const [selectedAnalysisId, setSelectedAnalysisId] = useState(null);
+  const [analyzingMessages, setAnalyzingMessages] = useState(new Set()); // [NEW] Track messages being analyzed
+
+  // [NEW] Handle Analysis Tag Click
+  const handleAnalysisTagClick = (messageId, e) => {
+    e.stopPropagation(); // prevent bubble click
+
+    if (selectedAnalysisId === messageId) {
+      // Deselect (Return to live mode)
+      setSelectedAnalysisId(null);
+      return;
+    }
+
+    const analysis = upsellHistory[messageId];
+    if (analysis) {
+      setSelectedAnalysisId(messageId);
+      updateRightPanel(analysis);
+      setRightPanelTab('intent');
+    }
+  };
 
   const [sampleList] = useState([
     { id: 0, title: '인터넷 장애 - 긴급 문의' },
@@ -791,33 +825,53 @@ export default function AgentDashboard() {
                   </div>
                 ) : (
                   <div className="chat-messages">
-                    {messages.map((msg, idx) => (
-                      <div
-                        key={idx}
-                        className={`chat-bubble ${msg.role} ${msg.role === 'user' ? 'clickable' : ''}`}
-                        onClick={msg.role === 'user' ? () => handleCustomerMessageClick(msg.content) : undefined}
-                        title={msg.role === 'user' ? '클릭하여 스크립트 생성' : ''}
-                      >
-                        <div className="bubble-avatar">
-                          <span className="material-icons-outlined">
-                            {msg.role === 'user' ? 'person' : 'support_agent'}
-                          </span>
-                        </div>
-                        <div className="bubble-content">
-                          <span className="bubble-author">
-                            {msg.role === 'user' ? '고객' : '상담사'}
-                          </span>
+                    {messages.map((msg, idx) => {
+                      const analysis = msg.messageId ? upsellHistory[msg.messageId] : null;
+                      const isSelected = selectedAnalysisId === msg.messageId;
+
+                      return (
+                        <div key={idx} className={`message-wrapper ${msg.role}`}>
+                          {/* Message Bubble */}
                           <div
-                            className="bubble-text"
-                            dangerouslySetInnerHTML={{
-                              __html: msg.role === 'user'
-                                ? highlightKeywords(msg.content)
-                                : msg.content
-                            }}
-                          />
+                            className={`chat-bubble ${msg.role} ${msg.role === 'user' ? 'clickable' : ''}`}
+                            onClick={msg.role === 'user' ? () => handleCustomerMessageClick(msg.content) : undefined}
+                            title={msg.role === 'user' ? '클릭하여 스크립트 생성' : ''}
+                          >
+                            <div className="bubble-avatar">
+                              <span className="material-icons-outlined">
+                                {msg.role === 'user' ? 'person' : 'smart_toy'}
+                              </span>
+                            </div>
+                            <div className="bubble-content">
+                              <div className="bubble-author">
+                                {msg.role === 'user' ? '고객' : 'AI 상담사'}
+                              </div>
+                              <div className="bubble-text" dangerouslySetInnerHTML={{ __html: highlightKeywords(msg.content) }}></div>
+                            </div>
+                          </div>
+
+                          {/* [NEW] Analysis Tag (Only for User messages) */}
+                          {msg.role === 'user' && msg.messageId && (
+                            <div
+                              className={`analysis-tag ${analysis ? analysis.upsell_possibility : 'analyzing'
+                                } ${isSelected ? 'selected' : ''}`}
+                              onClick={analysis ? (e) => handleAnalysisTagClick(msg.messageId, e) : undefined}
+                              title={analysis ? "AI 분석 결과 보기" : "분석 중..."}
+                              style={{ cursor: analysis ? 'pointer' : 'default' }}
+                            >
+                              <span className="material-icons-outlined tag-icon">
+                                {analysis ? 'analytics' : 'hourglass_empty'}
+                              </span>
+                              <span className="tag-label">
+                                {analysis ? '분석 완료' : '분석중'}
+                              </span>
+                              {isSelected && <span className="material-icons-outlined tag-check">check</span>}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
+
                   </div>
                 )}
               </div>

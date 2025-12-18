@@ -159,7 +159,8 @@ app.post('/api/stt/call-start', (req, res) => {
     startTime: timestamp || new Date().toISOString(),
     startTime: timestamp || new Date().toISOString(),
     messages: [], // 대화 내역 저장소 초기화
-    upsellAnalysis: null, // Upsell 분석 결과 초기화
+    upsellAnalysis: null, // Upsell 분석 결과 (Latest)
+    upsellAnalysisHistory: [], // [NEW] 메세지별 분석 이력
     ragResults: [] // RAG 자동 생성 결과
   };
 
@@ -187,7 +188,8 @@ app.post('/api/stt/line', async (req, res) => {
     role: speaker === 'customer' ? 'user' : 'assistant',
     content: text,
     keywords: keywords || [],
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    messageId: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` // [NEW] 메시지 ID 생성
   };
 
   ACTIVE_CALL.messages.push(newMessage);
@@ -310,6 +312,7 @@ app.get('/active-call', (req, res) => {
       ...ACTIVE_CALL,
       // Agent 결과 포함
       ragResults: ACTIVE_CALL.ragResults || [],
+      upsellAnalysisHistory: ACTIVE_CALL.upsellAnalysisHistory || [], // [NEW]
       latestIntent: ACTIVE_CALL.latestIntent || null
     } : null
   });
@@ -1220,12 +1223,30 @@ app.post('/internal/upsell-result', (req, res) => {
     return res.json({ success: false, reason: 'inactive_call' });
   }
 
-  console.log(`[Orchestrator] Received Upsell Analysis for ${callId}`);
+  console.log(`[Orchestrator] Received Upsell Analysis for ${callId} (Msg: ${analysisResult.messageId || 'unknown'})`);
 
-  // 활성 콜 상태 업데이트
+  // 활성 콜 상태 업데이트 (Latest)
   ACTIVE_CALL.upsellAnalysis = analysisResult;
 
-  // 필요하다면 여기서 프론트엔드에 소켓 이벤트를 쏠 수도 있음 (현재는 폴링 방식이므로 데이터만 업데이트)
+  // [NEW] History에 추가 (메시지 ID 기준)
+  if (!ACTIVE_CALL.upsellAnalysisHistory) {
+    ACTIVE_CALL.upsellAnalysisHistory = [];
+  }
+
+  // 중복 방지 (messageId가 있는 경우)
+  if (analysisResult.messageId) {
+    const exists = ACTIVE_CALL.upsellAnalysisHistory.find(a => a.messageId === analysisResult.messageId);
+    if (!exists) {
+      ACTIVE_CALL.upsellAnalysisHistory.push(analysisResult);
+    } else {
+      // 이미 있으면 업데이트?
+      const idx = ACTIVE_CALL.upsellAnalysisHistory.findIndex(a => a.messageId === analysisResult.messageId);
+      ACTIVE_CALL.upsellAnalysisHistory[idx] = analysisResult;
+    }
+  } else {
+    // messageId가 없으면 그냥 추가 (Fallback)
+    ACTIVE_CALL.upsellAnalysisHistory.push(analysisResult);
+  }
 
   res.json({ success: true });
 });

@@ -116,9 +116,12 @@ html,
 }
 
 @keyframes pulse-badge {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.85;
   }
@@ -618,6 +621,136 @@ html,
   padding: 0.125rem 0.25rem;
   border-radius: 3px;
 }
+
+/* [NEW] Message Wrapper & Analysis Tags */
+.message-wrapper {
+  display: flex;
+  align-items: flex-start;
+  /* Top align */
+  gap: 12px;
+  width: 100%;
+}
+
+.message-wrapper.user {
+  flex-direction: row;
+}
+
+.message-wrapper.assistant {
+  flex-direction: row-reverse;
+}
+
+/* Tag Styles */
+.analysis-tag {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 20px;
+  background: white;
+  border: 1px solid var(--border-color);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s;
+  animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  margin-top: 10px;
+  /* Align slightly with text */
+}
+
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.analysis-tag:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+
+.analysis-tag.selected {
+  background: var(--bg-dark);
+  color: white;
+  border-color: var(--bg-dark);
+}
+
+.analysis-tag .tag-icon {
+  font-size: 16px;
+}
+
+.analysis-tag .tag-check {
+  font-size: 14px;
+  margin-left: 4px;
+}
+
+/* Color Coding based on Upsell Possibility */
+
+/* Analyzing State (Gray, pulsing) */
+.analysis-tag.analyzing {
+  border-color: var(--border-dark);
+  color: var(--text-muted);
+  background: #f9fafb;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* High = Green (Positive, Upsell Opportunity) */
+.analysis-tag.high {
+  border-color: var(--success);
+  color: var(--success);
+  background: #ecfdf5;
+}
+
+.analysis-tag.high.selected {
+  background: var(--success);
+  color: white;
+}
+
+/* Medium = Yellow (Neutral) */
+.analysis-tag.medium {
+  border-color: var(--warning);
+  color: #d97706;
+  background: #fef3c7;
+}
+
+.analysis-tag.medium.selected {
+  background: var(--warning);
+  color: white;
+}
+
+/* Low/Not Recommended = Gray (Negative or Not Suitable) */
+.analysis-tag.low,
+.analysis-tag.not_recommended {
+  border-color: var(--text-muted);
+  color: var(--text-secondary);
+  background: #f3f4f6;
+}
+
+.analysis-tag.low.selected,
+.analysis-tag.not_recommended.selected {
+  background: var(--text-secondary);
+  color: white;
+}
+
 
 /* ========================================
    Right Panel
