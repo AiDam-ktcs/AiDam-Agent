@@ -131,6 +131,7 @@ export default function AgentDashboard() {
         if (wasInactive) {
           setRightPanelTab('intent')
           setRagScripts([]) // 새 통화 시 RAG 결과 초기화
+          setIsRagCleared(false) // 새 통화 시작 시 초기화 상태 해제
 
           // [NEW] Upsell Analysis Reset
           setCustomerIntent('대화 내용 분석 대기 중...')
@@ -152,7 +153,8 @@ export default function AgentDashboard() {
           }
         })
         setCurrentPhoneNumber(data.call.customer['번호'])
-        if (view === 'main' && data.call.messages) {
+        // 초기화 상태가 아닐 때만 메시지 복원
+        if (view === 'main' && data.call.messages && !isRagCleared) {
           const newMessages = data.call.messages.map(m => ({
             role: m.role,
             content: m.content,
@@ -169,10 +171,18 @@ export default function AgentDashboard() {
           });
         }
 
-        // Backend-driven RAG Results Update
-        if (data.call.ragResults && data.call.ragResults.length > 0) {
-          if (data.call.ragResults.length !== ragScripts.length) {
-            setRagScripts(data.call.ragResults)
+        // Backend-driven RAG Results Update (로컬 스크립트 보존, 초기화 상태가 아닐 때만)
+        if (data.call.ragResults && data.call.ragResults.length > 0 && !isRagCleared) {
+          // 로컬에서 생성된 스크립트 보존 (isLocal: true인 항목)
+          const localScripts = ragScripts.filter(s => s.isLocal)
+          // 백엔드 스크립트 + 로컬 스크립트 병합
+          const mergedScripts = [...data.call.ragResults, ...localScripts]
+          // 중복 방지 (ID 기준)
+          const uniqueScripts = mergedScripts.filter((script, index, self) =>
+            index === self.findIndex(s => s.id === script.id)
+          )
+          if (JSON.stringify(uniqueScripts.map(s => s.id)) !== JSON.stringify(ragScripts.map(s => s.id))) {
+            setRagScripts(uniqueScripts)
           }
         }
 
@@ -208,7 +218,7 @@ export default function AgentDashboard() {
   useEffect(() => {
     const interval = setInterval(pollCallStatus, 2000)
     return () => clearInterval(interval)
-  }, [callStatus, selectedAnalysisId, upsellHistory, view])
+  }, [callStatus, selectedAnalysisId, upsellHistory, view, isRagCleared])
 
   // Auto-navigate Effect when manually ending call
   useEffect(() => {
