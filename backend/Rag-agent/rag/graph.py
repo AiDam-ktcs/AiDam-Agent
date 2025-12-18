@@ -102,6 +102,16 @@ class RAGGraph:
     
     def _analyze_context(self, state: CallState) -> Dict[str, Any]:
         """맥락 분석 (하이브리드: 규칙 + Intent + LLM fallback)"""
+        
+        # force_generate로 이미 GENERATE가 설정된 경우 분석 건너뛰기
+        if state.get("context_decision") == "GENERATE" and state.get("decision_reason") == "forced":
+            return {
+                "context_decision": "GENERATE",
+                "decision_reason": "forced",
+                "should_generate": True,
+                "importance_score": 1.0
+            }
+        
         utterance = state["recent_user_utterance"].strip()
         history = state.get("history", [])
         
@@ -170,7 +180,21 @@ class RAGGraph:
                     "importance": 0.0
                 }
         
-        # 규칙 3: 인사/감사 표현만 있으면 → SKIP
+        # 규칙 3: 용건 키워드가 있으면 → GENERATE (인사와 섞여있어도 용건 우선)
+        business_keywords = [
+            "문의", "변경", "해지", "가입", "신청", "결제", "환불", "취소",
+            "요금", "데이터", "로밍", "배송", "반품", "교환", "수리", "설치",
+            "어떻게", "왜", "언제", "뭐", "얼마", "?",
+            "안돼", "안됨", "오류", "문제", "불편"
+        ]
+        if any(kw in utterance for kw in business_keywords):
+            return {
+                "decision": "GENERATE",
+                "reason": "business_request",
+                "importance": 0.7
+            }
+        
+        # 규칙 4: 인사/감사 표현만 있으면 → SKIP (용건 체크 후!)
         greeting_patterns = [
             "감사합니다", "감사해요", "고마워요",
             "안녕하세요", "수고하세요", "알겠습니다", "알겠어요"
@@ -182,7 +206,7 @@ class RAGGraph:
                 "importance": 0.0
             }
         
-        # 규칙 4: 종료 신호 감지
+        # 규칙 5: 종료 신호 감지
         end_signals = [
             "됐습니다", "됐어요", "끊을게요", "필요없어요"
         ]
@@ -376,7 +400,7 @@ class RAGGraph:
             "history": updated_history
         }
     
-    def invoke(self, user_message: str, history: list = None) -> Dict[str, Any]:
+    def invoke(self, user_message: str, history: list = None, force_generate: bool = False) -> Dict[str, Any]:
         """그래프 실행 (맥락 분석 포함)"""
         if history is None:
             history = []
@@ -393,18 +417,18 @@ class RAGGraph:
             "history": history,
             "retrieved_docs": [],
             "answer": "",
-            "context_decision": None,
+            "context_decision": "GENERATE" if force_generate else None,  # 강제 생성 시 바로 GENERATE
             "current_intent": None,
             "last_intent": last_intent,
             "importance_score": None,
-            "decision_reason": None,
-            "should_generate": None
+            "decision_reason": "forced" if force_generate else None,
+            "should_generate": True if force_generate else None
         }
         
         result = self.graph.invoke(initial_state)
         
-        # SKIP된 경우 처리
-        if result.get("context_decision") == "SKIP":
+        # SKIP된 경우 처리 (force_generate면 이 조건에 안 걸림)
+        if result.get("context_decision") == "SKIP" and not force_generate:
             # 간단한 확인 응답만 반환 (히스토리 업데이트 없음)
             return {
                 "answer": "",  # 빈 답변

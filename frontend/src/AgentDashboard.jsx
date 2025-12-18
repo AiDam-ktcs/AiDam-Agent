@@ -25,8 +25,13 @@ export default function AgentDashboard() {
   // 고객 정보 (Backend Integration)
   const [customerInfo, setCustomerInfo] = useState(null)
 
-  // RAG 스크립트 상태
-  const [ragScripts, setRagScripts] = useState([])
+  // 고객 메시지 클릭 시 스크립트 생성 트리거
+  const [triggerMessage, setTriggerMessage] = useState(null)
+
+  // 고객 메시지 클릭 핸들러
+  const handleCustomerMessageClick = (messageContent) => {
+    setTriggerMessage({ content: messageContent, timestamp: Date.now() })
+  }
 
   // Call Status Polling Function
   const pollCallStatus = async () => {
@@ -775,7 +780,12 @@ export default function AgentDashboard() {
                 ) : (
                   <div className="chat-messages">
                     {messages.map((msg, idx) => (
-                      <div key={idx} className={`chat-bubble ${msg.role}`}>
+                      <div 
+                        key={idx} 
+                        className={`chat-bubble ${msg.role} ${msg.role === 'user' ? 'clickable' : ''}`}
+                        onClick={msg.role === 'user' ? () => handleCustomerMessageClick(msg.content) : undefined}
+                        title={msg.role === 'user' ? '클릭하여 스크립트 생성' : ''}
+                      >
                         <div className="bubble-avatar">
                           <span className="material-icons-outlined">
                             {msg.role === 'user' ? 'person' : 'support_agent'}
@@ -803,10 +813,7 @@ export default function AgentDashboard() {
 
             {/* Center Panel: AI Recommended Scripts */}
             <section className="center-panel">
-              <RAGAssistant 
-                messages={messages} 
-                onScriptsChange={setRagScripts}
-              />
+              <RAGAssistant messages={messages} triggerMessage={triggerMessage} />
             </section>
 
             {/* Right Panel: Customer Intent + Recommendations */}

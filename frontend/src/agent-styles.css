@@ -532,6 +532,23 @@ html,
   gap: 0.75rem;
 }
 
+.chat-bubble.clickable {
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.chat-bubble.clickable:hover {
+  transform: translateX(4px);
+}
+
+.chat-bubble.clickable:hover .bubble-content {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.chat-bubble.clickable:active {
+  transform: translateX(2px);
+}
+
 .chat-bubble.assistant {
   flex-direction: row-reverse;
 }
