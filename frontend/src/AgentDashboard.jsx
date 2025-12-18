@@ -19,9 +19,6 @@ export default function AgentDashboard() {
   const [autoAnalyze, setAutoAnalyze] = useState(true)
   const [callStatus, setCallStatus] = useState('active') // 'idle', 'ringing', 'active', 'ended'
   const [currentPhoneNumber, setCurrentPhoneNumber] = useState('010-1111-2222')
-  const [volume, setVolume] = useState(50)
-  const [isMuted, setIsMuted] = useState(false)
-  const [isPaused, setIsPaused] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState('intent') // 'intent', 'report'
   const [regenerating, setRegenerating] = useState(false)
 
@@ -573,21 +570,17 @@ export default function AgentDashboard() {
       {/* Header */}
       <header className="main-header">
         <div className="header-left">
-          <h1 className="app-title">AiDam</h1>
+          {/* 통화 상태 표시 */}
+          <div className={`call-status-badge ${callStatus === 'active' ? 'status-active' : 'status-ended'}`}>
+            <span className="material-icons-outlined">
+              {callStatus === 'active' ? 'phone_in_talk' : 'phone_disabled'}
+            </span>
+            <span>{callStatus === 'active' ? '통화중' : '통화 종료됨'}</span>
+          </div>
           <div className="header-divider"></div>
-
-          <button
-            className="end-call-btn"
-            onClick={handleEndCall}
-            disabled={callStatus === 'ended' || callStatus === 'idle'}
-          >
-            <span className="material-icons-outlined">call_end</span>
-            <span>End Call</span>
-          </button>
 
           {/* Dev Tool: Simulate Call */}
           <div style={{ position: 'relative', display: 'inline-block' }}>
-            {/* ... keeping simulation button ... */}
             <button
               className="sim-call-btn"
               onClick={toggleSimulationMenu}
@@ -612,7 +605,6 @@ export default function AgentDashboard() {
               </span>
               {isSimulating ? 'Simulating...' : 'Simulate Call'}
             </button>
-            {/* ... keeping simulation menu ... */}
             {simulationMenuOpen && (
               <div style={{
                 position: 'absolute',
@@ -676,45 +668,8 @@ export default function AgentDashboard() {
         </div>
 
         <div className="header-center">
-          {/* ... keeping center components ... */}
-          <div className="recording-status">
-            <span className="recording-dot"></span>
-            <span className="recording-text">Recording...</span>
-          </div>
-          <div className="volume-control">
-            <span className="material-icons-outlined">volume_down</span>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={volume}
-              onChange={(e) => setVolume(e.target.value)}
-              className="volume-slider"
-            />
-            <span className="material-icons-outlined">volume_up</span>
-          </div>
-          <div className="call-controls">
-            <button
-              className={`control-btn ${isPaused ? 'active' : ''}`}
-              onClick={() => setIsPaused(!isPaused)}
-            >
-              <span className="material-icons-outlined">{isPaused ? 'play_arrow' : 'pause'}</span>
-            </button>
-            <button
-              className={`control-btn ${isMuted ? 'active' : ''}`}
-              onClick={() => setIsMuted(!isMuted)}
-            >
-              <span className="material-icons-outlined">{isMuted ? 'mic' : 'mic_off'}</span>
-            </button>
-          </div>
-          <div className="audio-visualizer">
-            <span className="bar" style={{ height: '8px' }}></span>
-            <span className="bar active" style={{ height: '20px' }}></span>
-            <span className="bar" style={{ height: '12px' }}></span>
-            <span className="bar active" style={{ height: '24px' }}></span>
-            <span className="bar" style={{ height: '8px' }}></span>
-            <span className="bar active" style={{ height: '16px' }}></span>
-          </div>
+          {/* AIDAM을 중앙으로 이동 */}
+          <h1 className="app-title">AiDam</h1>
         </div>
 
         <div className="header-right">

@@ -77,10 +77,11 @@ html,
   display: flex;
   align-items: center;
   gap: 1rem;
+  flex: 1;
 }
 
 .app-title {
-  font-size: 1.25rem;
+  font-size: 1.5rem;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -91,34 +92,43 @@ html,
   background: var(--border-color);
 }
 
-.end-call-btn {
+.call-status-badge {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
-  background: var(--danger);
-  color: white;
-  border: none;
   border-radius: var(--radius);
   font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
+  font-weight: 600;
   transition: all 0.2s;
 }
 
-.end-call-btn:hover:not(:disabled) {
-  background: #dc2626;
+.call-status-badge.status-active {
+  background: var(--success);
+  color: white;
+  animation: pulse-badge 2s ease-in-out infinite;
 }
 
-.end-call-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.call-status-badge.status-ended {
+  background: var(--text-secondary);
+  color: white;
+  opacity: 0.7;
+}
+
+@keyframes pulse-badge {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.85;
+  }
 }
 
 .header-center {
   display: flex;
   align-items: center;
-  gap: 1.5rem;
+  justify-content: center;
+  flex: 1;
 }
 
 .recording-status {
@@ -261,6 +271,8 @@ html,
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  flex: 1;
+  justify-content: flex-end;
 }
 
 .header-btn {
