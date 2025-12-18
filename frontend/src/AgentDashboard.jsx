@@ -138,6 +138,9 @@ export default function AgentDashboard() {
   const [aiReasoning, setAiReasoning] = useState([])
   const [isAnalyzingIntent, setIsAnalyzingIntent] = useState(false)
 
+  // RAG Scripts State (Lifted from RAGAssistant)
+  const [ragScripts, setRagScripts] = useState([])
+
   // 선택된 요금제에 대한 추천 스크립트
   const [planScript, setPlanScript] = useState('')
   const [scriptLoading, setScriptLoading] = useState(false)
@@ -813,7 +816,12 @@ export default function AgentDashboard() {
 
             {/* Center Panel: AI Recommended Scripts */}
             <section className="center-panel">
-              <RAGAssistant messages={messages} triggerMessage={triggerMessage} />
+              <RAGAssistant
+                messages={messages}
+                triggerMessage={triggerMessage}
+                ragScripts={ragScripts}
+                setRagScripts={setRagScripts}
+              />
             </section>
 
             {/* Right Panel: Customer Intent + Recommendations */}
