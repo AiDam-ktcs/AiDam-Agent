@@ -16,7 +16,7 @@ const KEYWORD_TAGS = [
   { id: 8, label: '#쿠폰', query: '쿠폰 사용' }
 ]
 
-export default function RAGAssistant({ messages: conversationMessages }) {
+export default function RAGAssistant({ messages: conversationMessages, onScriptsChange }) {
   const [scripts, setScripts] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -34,6 +34,13 @@ export default function RAGAssistant({ messages: conversationMessages }) {
   useEffect(() => {
     historyRef.current = history
   }, [history])
+
+  // scripts 변경 시 부모에게 알림
+  useEffect(() => {
+    if (onScriptsChange) {
+      onScriptsChange(scripts)
+    }
+  }, [scripts, onScriptsChange])
 
   const scrollToBottom = () => {
     scriptsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
