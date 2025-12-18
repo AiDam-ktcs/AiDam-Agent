@@ -18,6 +18,7 @@ export default function AgentDashboard() {
   const [selectedReportId, setSelectedReportId] = useState(null)
   const [autoAnalyze, setAutoAnalyze] = useState(true)
   const [callStatus, setCallStatus] = useState('active') // 'idle', 'ringing', 'active', 'ended'
+  const [currentCallId, setCurrentCallId] = useState(null) // 현재 통화 ID (고객 변경 감지용)
   const [currentPhoneNumber, setCurrentPhoneNumber] = useState('010-1111-2222')
   const [rightPanelTab, setRightPanelTab] = useState('intent') // 'intent', 'report'
   const [regenerating, setRegenerating] = useState(false)
@@ -40,12 +41,16 @@ export default function AgentDashboard() {
       const data = await resp.json()
       if (data.active && data.call) {
         const wasInactive = callStatus === 'idle' || callStatus === 'ended'
+        const isNewCall = currentCallId !== null && currentCallId !== data.call.callId
         setCallStatus('active')
+        setCurrentCallId(data.call.callId)
 
         // 새로운 통화가 시작되면 고객 분석 탭으로 전환 및 RAG 초기화
-        if (wasInactive) {
+        if (wasInactive || isNewCall) {
           setRightPanelTab('intent')
           setRagScripts([]) // 새 통화 시 RAG 결과 초기화
+          setMessages([]) // 대화 내역도 초기화
+          setIsRagCleared(false) // 초기화 상태 리셋
         }
 
         setCustomerInfo({
@@ -59,7 +64,8 @@ export default function AgentDashboard() {
           }
         })
         setCurrentPhoneNumber(data.call.customer['번호'])
-        if (view === 'main' && data.call.messages) {
+        // 초기화 상태가 아닐 때만 messages 업데이트
+        if (view === 'main' && data.call.messages && !isRagCleared) {
           setMessages(data.call.messages.map(m => ({
             role: m.role,
             content: m.content,
@@ -69,10 +75,21 @@ export default function AgentDashboard() {
 
         // Backend-driven RAG Results Update
         if (data.call.ragResults && data.call.ragResults.length > 0) {
-          // 새로운 결과만 추가 (기존 것과 비교)
-          if (data.call.ragResults.length !== ragScripts.length) {
-            setRagScripts(data.call.ragResults)
-          }
+          // 새로운 백엔드 결과만 추가 (기존 스크립트 유지)
+          setRagScripts(prev => {
+            const existingIds = new Set(prev.map(s => s.id))
+            const newBackendResults = data.call.ragResults
+              .filter(r => !existingIds.has(r.id))
+              .map(script => ({
+                ...script,
+                sources: script.sources ? script.sources.slice(0, 1) : []
+              }))
+            
+            if (newBackendResults.length > 0) {
+              return [...prev, ...newBackendResults]
+            }
+            return prev
+          })
         }
 
         // Backend-driven Upsell Analysis Update
@@ -149,6 +166,7 @@ export default function AgentDashboard() {
 
   // RAG Scripts State (Lifted from RAGAssistant)
   const [ragScripts, setRagScripts] = useState([])
+  const [isRagCleared, setIsRagCleared] = useState(false) // 초기화 상태 추적
 
   // 선택된 요금제에 대한 추천 스크립트
   const [planScript, setPlanScript] = useState('')
@@ -830,6 +848,10 @@ export default function AgentDashboard() {
                 triggerMessage={triggerMessage}
                 ragScripts={ragScripts}
                 setRagScripts={setRagScripts}
+                onClear={() => {
+                  setMessages([])
+                  setIsRagCleared(true)
+                }}
               />
             </section>
 
