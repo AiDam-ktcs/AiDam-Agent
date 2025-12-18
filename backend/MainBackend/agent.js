@@ -222,6 +222,18 @@ app.post('/api/stt/line', async (req, res) => {
           timeout: 5000 // 짧은 타임아웃
         }).catch(err => console.error(`[System] Failed to forward to Upsell Agent: ${err.message}`));
       }
+
+      // RAG Agent로도 동일한 데이터 전송
+      const ragAgent = agentsConfig.getAgent('rag');
+      if (ragAgent && ragAgent.enabled) {
+        const url = agentsConfig.buildUrl('rag', 'onMessage');
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          timeout: 5000
+        }).catch(err => console.error(`[System] Failed to forward to RAG Agent: ${err.message}`));
+      }
     } catch (e) {
       console.error(`[System] Error triggering upsell logic: ${e.message}`);
     }
@@ -707,7 +719,7 @@ app.post('/process', async (req, res) => {
               // Extract customer info from active call if available
               const customerName = ACTIVE_CALL?.customer?.['이름'] || eventData.data.customer_name || 'Unknown';
               const customerPhone = ACTIVE_CALL?.customer?.['번호'] || eventData.data.customer_phone || 'Unknown';
-              
+
               const reportData = {
                 id: eventData.data.reportId,
                 created_at: eventData.data.created_at,

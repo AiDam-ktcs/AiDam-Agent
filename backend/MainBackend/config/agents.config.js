@@ -39,7 +39,8 @@ module.exports = {
       endpoints: {
         health: '/',
         chat: '/chat',
-        search: '/search'
+        search: '/search',
+        onMessage: '/event/on-message'
       }
     },
     upsell: {
