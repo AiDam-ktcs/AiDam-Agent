@@ -42,9 +42,10 @@ export default function AgentDashboard() {
         const wasInactive = callStatus === 'idle' || callStatus === 'ended'
         setCallStatus('active')
 
-        // 새로운 통화가 시작되면 고객 분석 탭으로 전환
+        // 새로운 통화가 시작되면 고객 분석 탭으로 전환 및 RAG 초기화
         if (wasInactive) {
           setRightPanelTab('intent')
+          setRagScripts([]) // 새 통화 시 RAG 결과 초기화
         }
 
         setCustomerInfo({
@@ -64,6 +65,14 @@ export default function AgentDashboard() {
             content: m.content,
             keywords: m.keywords
           })))
+        }
+
+        // Backend-driven RAG Results Update
+        if (data.call.ragResults && data.call.ragResults.length > 0) {
+          // 새로운 결과만 추가 (기존 것과 비교)
+          if (data.call.ragResults.length !== ragScripts.length) {
+            setRagScripts(data.call.ragResults)
+          }
         }
 
         // Backend-driven Upsell Analysis Update

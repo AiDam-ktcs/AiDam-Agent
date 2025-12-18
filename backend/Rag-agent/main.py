@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
 from dotenv import load_dotenv
+import httpx
 
 # 프로젝트 루트를 Python 경로에 추가
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -100,6 +101,20 @@ class SearchResponse(BaseModel):
     sources: List[Dict[str, Any]]
 
 
+# 이벤트 기반 메시지 처리용 모델 (Upsell Agent와 동일한 패턴)
+class ActiveCallContext(BaseModel):
+    callId: str
+    customer: Dict[str, Any] = {}
+    current_plan: str = "Unknown"
+
+
+class MessageEvent(BaseModel):
+    message: Dict[str, Any]
+    recent_history: List[Dict[str, Any]] = []
+    active_call_context: ActiveCallContext
+    history_length: int = 0
+
+
 @app.get("/")
 async def root():
     """헬스 체크"""
@@ -180,15 +195,105 @@ async def search(request: SearchRequest):
         )
 
 
+@app.post("/event/on-message")
+async def on_message_event(event: MessageEvent):
+    """
+    메인 백엔드로부터 새로운 메시지 수신 (이벤트 기반 분석)
+    - 사용자 메시지인 경우에만 분석 시도
+    - 분석 결과는 MainBackend의 /internal/rag-result 로 푸시
+    """
+    global rag_graph
+    
+    print(f"[RAG] Received event: role={event.message.get('role')}, content={event.message.get('content', '')[:30]}...")
+    
+    if rag_graph is None:
+        print("[RAG] rag_graph is None - not initialized")
+        return {"status": "ignored", "reason": "not_initialized"}
+    
+    # 1. 분석 조건 확인 (Filtering)
+    current_message_content = event.message.get("content", "").strip()
+    
+    # [Rule 1] 사용자 메시지일 때만 분석
+    if event.message.get("role") != "user":
+        print(f"[RAG] Ignored: not user message (role={event.message.get('role')})")
+        return {"status": "ignored", "reason": "not_user_message"}
+    
+    # [Rule 2] 너무 짧은 발화 무시 (공백 제외 3글자 미만으로 완화)
+    if len(current_message_content) < 3:
+        print(f"[RAG] Ignored: message too short ({len(current_message_content)} chars)")
+        return {"status": "ignored", "reason": "message_too_short"}
+    
+    # [Rule 3] 단순 인사말 필터링 - 완화: 인사만 있는 짧은 메시지만 필터
+    greeting_keywords = ["안녕하세요", "여보세요"]
+    if current_message_content in greeting_keywords:
+        print(f"[RAG] Ignored: pure greeting message")
+        return {"status": "ignored", "reason": "greeting_message"}
+    
+    # [Rule 4] 대화 길이 조건 제거 - 첫 메시지부터 분석
+    # (기존: history_length < 2 조건 제거)
+    
+    # 2. RAG 분석 실행
+    try:
+        print(f"[RAG] Analyzing message for call {event.active_call_context.callId}: {current_message_content[:50]}...")
+        
+        # recent_history를 history로 사용 (Upsell과 동일한 패턴)
+        # role 변환: user -> user, assistant/agent -> assistant
+        history = []
+        for msg in event.recent_history:
+            role = msg.get("role", "user")
+            if role in ["agent", "assistant"]:
+                role = "assistant"
+            history.append({
+                "role": role,
+                "content": msg.get("content", "")
+            })
+        
+        # RAG 그래프 실행
+        result = rag_graph.invoke(
+            user_message=current_message_content,
+            history=history,
+            force_generate=False
+        )
+        
+        # 3. 결과 MainBackend로 Push
+        analysis_payload = {
+            "callId": event.active_call_context.callId,
+            "result": {
+                "query": current_message_content,
+                "answer": result.get("answer", ""),
+                "sources": result.get("sources", []),
+                "skipped": result.get("skipped", False),
+                "reason": result.get("reason", "")
+            }
+        }
+        
+        # MainBackend로 Push
+        main_backend_url = "http://localhost:3000"
+        push_url = f"{main_backend_url}/internal/rag-result"
+        
+        async with httpx.AsyncClient() as client:
+            await client.post(push_url, json=analysis_payload, timeout=3.0)
+        
+        if result.get("skipped"):
+            print(f"[RAG] Skipped for {event.active_call_context.callId}: {result.get('reason')}")
+            return {"status": "skipped", "reason": result.get("reason")}
+        else:
+            print(f"[RAG] Result pushed to MainBackend for {event.active_call_context.callId}")
+            return {"status": "analyzed", "query": current_message_content[:30]}
+        
+    except Exception as e:
+        print(f"[RAG] Event analysis failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 if __name__ == "__main__":
     import uvicorn
-    """
-    불필요한 코드 정리를 위해 주석 처리리
-    # 프로젝트 루트에서 실행되도록 작업 디렉토리 확인
-    import os
-    if os.path.basename(os.getcwd()) == "backend":
-        # backend 디렉토리에서 실행 중이면 상위로 이동
-        os.chdir("..")
-    """
+    import asyncio
+    import platform
+    
+    # Windows asyncio 이벤트 루프 호환성 설정
+    if platform.system() == "Windows":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
