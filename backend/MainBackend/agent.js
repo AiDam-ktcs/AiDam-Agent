@@ -199,21 +199,21 @@ app.post('/api/stt/line', async (req, res) => {
   // 분석이 필요한지는 Upsell Agent가 스스로 판단하도록 함
   (async () => {
     try {
+      // 현재 활성 콜의 메타데이터(고객정보 등) 생성
+      const payload = {
+        message: newMessage,
+        recent_history: ACTIVE_CALL.messages.slice(-10), // 최근 10개 메시지 포함
+        active_call_context: {
+          callId: ACTIVE_CALL.callId,
+          customer: ACTIVE_CALL.customer,
+          current_plan: ACTIVE_CALL.customer['요금제'] || 'Unknown' // 단순화된 정보
+        },
+        history_length: ACTIVE_CALL.messages.length
+      };
+
       const upsellAgent = agentsConfig.getAgent('upsell');
       if (upsellAgent && upsellAgent.enabled) {
         const url = agentsConfig.buildUrl('upsell', 'onMessage');
-
-        // 현재 활성 콜의 메타데이터(고객정보 등)도 함께 전송
-        const payload = {
-          message: newMessage,
-          recent_history: ACTIVE_CALL.messages.slice(-10), // 최근 10개 메시지 포함
-          active_call_context: {
-            callId: ACTIVE_CALL.callId,
-            customer: ACTIVE_CALL.customer,
-            current_plan: ACTIVE_CALL.customer['요금제'] || 'Unknown' // 단순화된 정보
-          },
-          history_length: ACTIVE_CALL.messages.length
-        };
 
         // Non-blocking fetch
         fetch(url, {
@@ -237,9 +237,9 @@ app.post('/api/stt/line', async (req, res) => {
           body: JSON.stringify(payload),
           timeout: 5000
         })
-        .then(res => res.json())
-        .then(data => console.log(`[DEBUG] RAG Agent response:`, data))
-        .catch(err => console.error(`[System] Failed to forward to RAG Agent: ${err.message}`));
+          .then(res => res.json())
+          .then(data => console.log(`[DEBUG] RAG Agent response:`, data))
+          .catch(err => console.error(`[System] Failed to forward to RAG Agent: ${err.message}`));
       } else {
         console.log(`[DEBUG] RAG Agent skipped: agent=${!!ragAgent}, enabled=${ragAgent?.enabled}`);
       }
