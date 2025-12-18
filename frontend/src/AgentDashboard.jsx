@@ -129,6 +129,14 @@ export default function AgentDashboard() {
         if (wasInactive) {
           setRightPanelTab('intent')
           setRagScripts([]) // 새 통화 시 RAG 결과 초기화
+
+          // [NEW] Upsell Analysis Reset
+          setCustomerIntent('대화 내용 분석 대기 중...')
+          setAiReasoning([])
+          setRecommendedPlans([])
+          setSelectedAnalysisId(null)
+          setUpsellHistory({})
+          setAnalyzingMessages(new Set())
         }
 
         setCustomerInfo({
@@ -176,11 +184,14 @@ export default function AgentDashboard() {
         }
 
         // Backend-driven Upsell Analysis Update (Latest)
-        // Only update if we are NOT viewing a specific historical message
+        // [MODIFIED] Do NOT automatically update right panel even if selectedAnalysisId is null.
+        // User must click the tag to see the analysis.
+        /* 
         if (data.call.upsellAnalysis && selectedAnalysisId === null) {
           const result = data.call.upsellAnalysis;
           updateRightPanel(result);
-        }
+        } 
+        */
       } else if (callStatus === 'active') { // Call ended externally
         setCallStatus('ended')
         // Auto-navigate to Report Tab
@@ -855,13 +866,15 @@ export default function AgentDashboard() {
                           {msg.role === 'user' && msg.messageId && (
                             <div
                               className={`analysis-tag ${analysis
-                                ? (analysis.status === 'filtered' ? 'filtered' : analysis.upsell_possibility)
+                                ? (analysis.status === 'filtered'
+                                  ? 'filtered'
+                                  : (analysis.upsell_possibility || '').toLowerCase())
                                 : 'analyzing'
                                 } ${isSelected ? 'selected' : ''}`}
                               onClick={analysis && analysis.status !== 'filtered' ? (e) => handleAnalysisTagClick(msg.messageId, e) : undefined}
                               title={
                                 analysis
-                                  ? (analysis.status === 'filtered' ? `분석 제외됨` : "AI 분석 결과 보기")
+                                  ? (analysis.status === 'filtered' ? `분석 제외: ${analysis.reason}` : "AI 분석 결과 보기")
                                   : "분석 중..."
                               }
                               style={{ cursor: (analysis && analysis.status !== 'filtered') ? 'pointer' : 'default' }}
