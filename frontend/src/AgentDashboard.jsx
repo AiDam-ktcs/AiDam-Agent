@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import RAGAssistant from './RAGAssistant'
@@ -216,6 +216,14 @@ export default function AgentDashboard() {
       setRightPanelTab('report')
     }
   }, [callStatus])
+
+  // Auto-scroll to bottom of chat
+  const chatContainerRef = useRef(null)
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight
+    }
+  }, [messages])
 
 
   useEffect(() => {
@@ -838,7 +846,7 @@ export default function AgentDashboard() {
                     </div>
                   </div>
                 ) : (
-                  <div className="chat-messages">
+                  <div className="chat-messages" ref={chatContainerRef}>
                     {messages.map((msg, idx) => {
                       const analysis = msg.messageId ? upsellHistory[msg.messageId] : null;
                       const isSelected = selectedAnalysisId === msg.messageId;
