@@ -30,9 +30,9 @@ AUDIO_NORMALIZATION = True  # 오디오 정규화 활성화
 DENOISE_DRY_MIX = 0.02      # Denoiser dry mix (낮을수록 강한 노이즈 제거)
 
 # Beam Search 파라미터 (단어 경계 기반 LM 적용)
-# 주의: 현재 Beam Search는 개발 중이며 안정적이지 않습니다.
-# ENABLE_BEAM_SEARCH를 False로 설정하여 Greedy 디코딩 사용을 권장합니다.
-ENABLE_BEAM_SEARCH = False  # True: Beam Search + KenLM, False: Greedy (안정적)
+# KenLM 언어 모델과 함께 Beam Search를 사용하여 인식 정확도 향상
+ENABLE_BEAM_SEARCH = True  # True: Beam Search + KenLM, False: Greedy (안정적)
+BEAM_DECODER_TYPE = "nemo" # "nemo": NeMo 공식 decoder, "simple": SimpleCTC decoder
 BEAM_WIDTH = 64             # Beam 크기 (더 많은 후보 탐색)
 LM_ALPHA = 0.5              # 언어 모델 가중치 (BPE 특성상 낮은 값이 효과적)
 LM_BETA = 0.1               # 단어 삽입 보너스 (단어 완성 시 적용)

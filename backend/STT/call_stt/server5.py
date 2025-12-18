@@ -48,11 +48,13 @@ try:
         AUDIO_NORMALIZATION,
         DENOISE_DRY_MIX,
         ENABLE_BEAM_SEARCH,
+        BEAM_DECODER_TYPE,
         BEAM_WIDTH,
         LM_ALPHA,
         LM_BETA,
         BEAM_TOPK,
         DEBUG_BEAM_SEARCH,
+        KENLM_MODEL_PATH,
         DENOISER_MODEL_PATH,
         ASR_MODEL_PATH,
         KEYWORD_MODEL_PATH,
@@ -73,11 +75,13 @@ except ImportError:
     AUDIO_NORMALIZATION = True
     DENOISE_DRY_MIX = 0.02
     ENABLE_BEAM_SEARCH = False
+    BEAM_DECODER_TYPE = "simple"
     BEAM_WIDTH = 64
     LM_ALPHA = 0.5
     LM_BETA = 0.1
     BEAM_TOPK = 100
     DEBUG_BEAM_SEARCH = False
+    KENLM_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'korean_lm.bin')
     DENOISER_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'denoiser.th')
     ASR_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'Conformer-CTC-BPE.nemo')
     KEYWORD_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'qwen3-1.7b')
@@ -277,8 +281,9 @@ asr_model = None
 keyword_model = None
 keyword_tokenizer = None
 device = None
-ctc_decoder = None  # Beam Search + LM 디코더
+ctc_decoder = None  # SimpleCTC Beam Search 디코더
 USE_BEAM_SEARCH = False  # Beam Search 사용 여부
+BEAM_DECODER_MODE = "simple"  # "simple" or "nemo"
 
 def log(msg, *args):
     print(f"Media WS: ", msg, *args)
@@ -352,7 +357,7 @@ def notify_call_end(call_sid):
 
 def load_models():
     """서버 시작 시 모델 로드"""
-    global denoiser_model, asr_model, keyword_model, keyword_tokenizer, device, ctc_decoder, USE_BEAM_SEARCH
+    global denoiser_model, asr_model, keyword_model, keyword_tokenizer, device, ctc_decoder, USE_BEAM_SEARCH, BEAM_DECODER_MODE
     
     log("Loading models...")
     
@@ -398,70 +403,103 @@ def load_models():
         
         log("✓ ASR model loaded successfully")
         
-        # Vocabulary 로드
-        vocab_list = None
-        try:
-            vocab_path = os.path.join(BASE_DIR, 'src', 'nemo_asr', 'tokenizer_spe_bpe_v2048', 'vocab.txt')
-            with open(vocab_path, 'r', encoding='utf-8') as f:
-                vocab_list = [line.strip() for line in f]
-            log(f"✓ Loaded vocabulary: {len(vocab_list)} tokens")
-        except Exception as e:
-            log(f"Warning: Could not load vocabulary: {e}")
-            vocab_list = None
-        
-        # SimpleCTCBeamDecoder 설정 (순수 Python + KenLM)
-        # ENABLE_BEAM_SEARCH 설정에 따라 활성화
-        if ENABLE_BEAM_SEARCH and HAS_KENLM and vocab_list:
-            try:
-                # KenLM 모델 경로 확인
-                kenlm_paths = [
-                    os.path.join(BASE_DIR, 'models', 'korean_4gram.binary'),
-                    os.path.join(BASE_DIR, 'models', 'korean_4gram.arpa'),
-                ]
+        # Beam Search 설정
+        if ENABLE_BEAM_SEARCH:
+            # KenLM 모델 경로 확인
+            kenlm_paths = [
+                KENLM_MODEL_PATH,  # config.py에서 지정한 경로
+                os.path.join(BASE_DIR, 'models', 'korean_4gram.binary'),
+                os.path.join(BASE_DIR, 'models', 'korean_4gram.arpa'),
+                os.path.join(BASE_DIR, 'models', 'korean_lm.bin'),
+            ]
+            
+            kenlm_model_path = None
+            for path in kenlm_paths:
+                if os.path.exists(path):
+                    kenlm_model_path = path
+                    break
+            
+            if kenlm_model_path and HAS_KENLM:
+                BEAM_DECODER_MODE = BEAM_DECODER_TYPE
                 
-                kenlm_model_path = None
-                for path in kenlm_paths:
-                    if os.path.exists(path):
-                        kenlm_model_path = path
-                        break
+                if BEAM_DECODER_TYPE == "nemo":
+                    # NeMo 공식 BeamCTCInfer 사용
+                    try:
+                        from nemo.collections.asr.parts.submodules import ctc_beam_decoding
+                        
+                        # BeamCTCInferConfig 설정
+                        beam_config = ctc_beam_decoding.BeamCTCInferConfig(
+                            beam_size=BEAM_WIDTH,
+                            beam_alpha=LM_ALPHA,
+                            beam_beta=LM_BETA,
+                            kenlm_path=kenlm_model_path,
+                            return_best_hypothesis=True
+                        )
+                        
+                        # ASR 모델에 decoding strategy 설정
+                        asr_model.cfg.decoding.strategy = "beam"
+                        asr_model.cfg.decoding.beam = beam_config
+                        asr_model.change_decoding_strategy(asr_model.cfg.decoding)
+                        
+                        USE_BEAM_SEARCH = True
+                        log("✅ NeMo BeamCTCDecoder initialized successfully")
+                        log(f"   - Official NeMo implementation")
+                        log(f"   - Optimized for CTC + KenLM")
+                        log(f"   - KenLM model: {os.path.basename(kenlm_model_path)}")
+                        log(f"   - Beam width: {BEAM_WIDTH}")
+                        log(f"   - Alpha (LM weight): {LM_ALPHA}")
+                        log(f"   - Beta (word bonus): {LM_BETA}")
+                    except Exception as e:
+                        log(f"Warning: NeMo decoder failed, falling back to SimpleCTC: {e}")
+                        BEAM_DECODER_MODE = "simple"
                 
-                if kenlm_model_path:
-                    # SimpleCTCBeamDecoder 초기화
-                    ctc_decoder = SimpleCTCBeamDecoder(
-                        vocab=vocab_list,
-                        lm_path=kenlm_model_path,
-                        beam_width=BEAM_WIDTH,
-                        alpha=LM_ALPHA,
-                        beta=LM_BETA,
-                        topk=BEAM_TOPK,
-                        debug=DEBUG_BEAM_SEARCH
-                    )
-                    USE_BEAM_SEARCH = True
-                    log("✅ SimpleCTCBeamDecoder initialized successfully")
-                    log(f"   - Word-boundary based LM integration")
-                    log(f"   - Pure Python implementation (Windows compatible)")
-                    log(f"   - KenLM model: {os.path.basename(kenlm_model_path)}")
-                    log(f"   - Beam width: {BEAM_WIDTH}")
-                    log(f"   - Alpha (LM weight): {LM_ALPHA}")
-                    log(f"   - Beta (word bonus): {LM_BETA}")
-                    log(f"   - Top-K pruning: {BEAM_TOPK}")
-                    if DEBUG_BEAM_SEARCH:
-                        log(f"   - Debug mode: ENABLED")
-                else:
-                    log("[INFO] KenLM model not found, using Greedy decoding")
-                    USE_BEAM_SEARCH = False
-            except Exception as e:
-                log(f"Warning: Could not initialize Beam Search: {e}")
-                import traceback
-                traceback.print_exc()
+                if BEAM_DECODER_MODE == "simple":
+                    # SimpleCTCBeamDecoder 사용 (fallback)
+                    try:
+                        # Vocabulary 로드
+                        vocab_path = os.path.join(BASE_DIR, 'src', 'nemo_asr', 'tokenizer_spe_bpe_v2048', 'vocab.txt')
+                        with open(vocab_path, 'r', encoding='utf-8') as f:
+                            vocab_list = [line.strip() for line in f]
+                        log(f"✓ Loaded vocabulary: {len(vocab_list)} tokens")
+                        
+                        ctc_decoder = SimpleCTCBeamDecoder(
+                            vocab=vocab_list,
+                            lm_path=kenlm_model_path,
+                            beam_width=BEAM_WIDTH,
+                            alpha=LM_ALPHA,
+                            beta=LM_BETA,
+                            topk=BEAM_TOPK,
+                            debug=DEBUG_BEAM_SEARCH
+                        )
+                        USE_BEAM_SEARCH = True
+                        log("✅ SimpleCTCBeamDecoder initialized successfully")
+                        log(f"   - Word-boundary based LM integration")
+                        log(f"   - Pure Python implementation (Windows compatible)")
+                        log(f"   - KenLM model: {os.path.basename(kenlm_model_path)}")
+                        log(f"   - Beam width: {BEAM_WIDTH}")
+                        log(f"   - Alpha (LM weight): {LM_ALPHA}")
+                        log(f"   - Beta (word bonus): {LM_BETA}")
+                        log(f"   - Top-K pruning: {BEAM_TOPK}")
+                        if DEBUG_BEAM_SEARCH:
+                            log(f"   - Debug mode: ENABLED")
+                    except Exception as e:
+                        log(f"Warning: Could not initialize SimpleCTC decoder: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        USE_BEAM_SEARCH = False
+            else:
+                if not kenlm_model_path:
+                    log("[INFO] KenLM model not found at any of these paths:")
+                    for path in kenlm_paths:
+                        log(f"      - {path}")
+                    log("      Using Greedy decoding")
+                elif not HAS_KENLM:
+                    log("[INFO] kenlm not available, using Greedy decoding")
+                    log("      Install: pip install https://github.com/kpu/kenlm/archive/master.zip")
                 USE_BEAM_SEARCH = False
         else:
-            if not ENABLE_BEAM_SEARCH:
-                log("[INFO] Beam Search disabled in config (ENABLE_BEAM_SEARCH=False)")
-                log("      Using Greedy decoding for stability")
-            elif not HAS_KENLM:
-                log("[INFO] kenlm not available, using Greedy decoding")
-                log("      Install: pip install https://github.com/kpu/kenlm/archive/master.zip")
+            log("[INFO] Beam Search disabled in config (ENABLE_BEAM_SEARCH=False)")
+            log("      Using Greedy decoding for stability")
             USE_BEAM_SEARCH = False
             
     except Exception as e:
@@ -902,42 +940,79 @@ def process_audio_chunk(buffer, input_sr, target_sr):
         # STT
         if asr_model is not None:
             with torch.no_grad():
-                if USE_BEAM_SEARCH and ctc_decoder is not None:
-                    # Beam Search + KenLM 사용
-                    try:
-                        # audio를 tensor로 변환
-                        audio_tensor = torch.tensor(audio_denoised).unsqueeze(0).to(device)
-                        audio_length = torch.tensor([audio_tensor.shape[1]]).to(device)
-                        
-                        # NeMo 모델에서 logits 추출
-                        processed_signal, processed_signal_length = asr_model.preprocessor(
-                            input_signal=audio_tensor, length=audio_length
-                        )
-                        if asr_model.spec_augmentation is not None and asr_model.training:
-                            processed_signal = asr_model.spec_augmentation(
-                                input_spec=processed_signal, length=processed_signal_length
+                if USE_BEAM_SEARCH:
+                    if BEAM_DECODER_MODE == "nemo":
+                        # NeMo 공식 BeamCTCDecoder 사용
+                        try:
+                            # transcribe with beam search
+                            transcription = asr_model.transcribe([audio_denoised], batch_size=1)
+                            if transcription and len(transcription) > 0:
+                                result = transcription[0]
+                                if hasattr(result, 'text'):
+                                    text = result.text
+                                else:
+                                    text = str(result)
+                                
+                                if text:
+                                    text = unicodedata.normalize('NFC', text)
+                                    # 후처리: 반복 문자 제거
+                                    text = re.sub(r'(.)\1{2,}', r'\1\1', text)
+                                    return text.strip()
+                        except Exception as e:
+                            log(f"NeMo Beam Search failed, falling back to Greedy: {e}")
+                    
+                    elif BEAM_DECODER_MODE == "simple" and ctc_decoder is not None:
+                        # SimpleCTCBeamDecoder 사용
+                        try:
+                            # audio를 tensor로 변환
+                            audio_tensor = torch.tensor(audio_denoised).unsqueeze(0).to(device)
+                            audio_length = torch.tensor([audio_tensor.shape[1]]).to(device)
+                            
+                            # NeMo 모델에서 logits 추출
+                            processed_signal, processed_signal_length = asr_model.preprocessor(
+                                input_signal=audio_tensor, length=audio_length
                             )
-                        encoded, encoded_len = asr_model.encoder(
-                            audio_signal=processed_signal, length=processed_signal_length
-                        )
-                        log_probs = asr_model.decoder(encoder_output=encoded)
-                        
-                        # SimpleCTCBeamDecoder로 디코딩
-                        # log_probs shape: [batch=1, time, vocab]
-                        logits_np = log_probs[0].cpu().numpy()  # [time, vocab]
-                        text = ctc_decoder.decode(logits_np)
-                        
-                        if text:
-                            text = unicodedata.normalize('NFC', text)
-                            # 후처리: 반복 문자 제거
-                            text = re.sub(r'(.)\1{2,}', r'\1\1', text)
-                            return text.strip()
-                    except Exception as e:
-                        log(f"Beam Search failed, falling back to Greedy: {e}")
-                        # Beam Search 실패 시 Greedy로 폴백
+                            if asr_model.spec_augmentation is not None and asr_model.training:
+                                processed_signal = asr_model.spec_augmentation(
+                                    input_spec=processed_signal, length=processed_signal_length
+                                )
+                            encoded, encoded_len = asr_model.encoder(
+                                audio_signal=processed_signal, length=processed_signal_length
+                            )
+                            log_probs = asr_model.decoder(encoder_output=encoded)
+                            
+                            # SimpleCTCBeamDecoder로 디코딩
+                            # log_probs shape: [batch=1, time, vocab]
+                            logits_np = log_probs[0].cpu().numpy()  # [time, vocab]
+                            text = ctc_decoder.decode(logits_np)
+                            
+                            if text:
+                                text = unicodedata.normalize('NFC', text)
+                                # 후처리: 반복 문자 제거
+                                text = re.sub(r'(.)\1{2,}', r'\1\1', text)
+                                return text.strip()
+                        except Exception as e:
+                            log(f"SimpleCTC Beam Search failed, falling back to Greedy: {e}")
                 
                 # Greedy 디코딩 (기본 또는 폴백)
+                # ASR 모델의 decoding strategy를 임시로 greedy로 변경
+                original_strategy = None
+                try:
+                    if hasattr(asr_model, 'cfg') and hasattr(asr_model.cfg, 'decoding'):
+                        original_strategy = asr_model.cfg.decoding.strategy
+                        asr_model.change_decoding_strategy(None)  # Reset to greedy
+                except:
+                    pass
+                
                 transcription = asr_model.transcribe([audio_denoised], batch_size=1)
+                
+                # 원래 strategy 복구
+                if original_strategy and USE_BEAM_SEARCH and BEAM_DECODER_MODE == "nemo":
+                    try:
+                        asr_model.change_decoding_strategy(asr_model.cfg.decoding)
+                    except:
+                        pass
+                
                 if transcription and len(transcription) > 0:
                     # Hypothesis 객체에서 text 속성 추출
                     result = transcription[0]
