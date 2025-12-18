@@ -28,10 +28,93 @@ export default function AgentDashboard() {
   // 고객 메시지 클릭 시 스크립트 생성 트리거
   const [triggerMessage, setTriggerMessage] = useState(null)
 
+  // 추천 요금제 (AI가 분석해서 제공)
+  const [recommendedPlans, setRecommendedPlans] = useState([])
+
+  // AI 분석/사고 과정
+  const [aiReasoning, setAiReasoning] = useState([])
+  const [isAnalyzingIntent, setIsAnalyzingIntent] = useState(false)
+
+  // RAG Scripts State (Lifted from RAGAssistant)
+  const [ragScripts, setRagScripts] = useState([])
+
+  // 선택된 요금제에 대한 추천 스크립트
+  const [planScript, setPlanScript] = useState('')
+  const [scriptLoading, setScriptLoading] = useState(false)
+
+  // 고객 의중 (AI 분석 결과)
+  const [customerIntent, setCustomerIntent] = useState('대화 내용 분석 대기 중...')
+
+  // [NEW] Upsell Analysis History & Selection
+  const [upsellHistory, setUpsellHistory] = useState({}); // { messageId: AnalysisResult }
+  const [selectedAnalysisId, setSelectedAnalysisId] = useState(null);
+  const [analyzingMessages, setAnalyzingMessages] = useState(new Set()); // [NEW] Track messages being analyzed
+
+  const [sampleList] = useState([
+    { id: 0, title: '인터넷 장애 - 긴급 문의' },
+    { id: 1, title: '통화품질 불량 - 유심 교체' },
+    { id: 2, title: '요금제 변경 - 데이터 절약' },
+    { id: 3, title: '청구서 이상 - 부가서비스 항의' },
+    { id: 4, title: '기기 변경 - 아이폰 구매' },
+    { id: 5, title: '데이터 차단 - 추가 구매' },
+    { id: 6, title: '해외 로밍 - 일본 여행' },
+    { id: 7, title: '명의 도용 오해 - 미납 발견' },
+    { id: 8, title: '5G 커버리지 불만' },
+    { id: 9, title: '어르신 요금제 - 효도 상담' }
+  ])
+
+  // [NEW] Helper to update Right Panel State
+  const updateRightPanel = (result) => {
+    // Update Intent logic
+    if (result.customer_intent) {
+      setCustomerIntent(result.customer_intent);
+    }
+
+    // Update Reasoning logic
+    if (result.reasoning_steps && result.reasoning_steps.length > 0) {
+      setAiReasoning(result.reasoning_steps);
+    } else if (result.upsell_reason) {
+      setAiReasoning([result.upsell_reason]);
+    } else if (result.intent_description) {
+      setAiReasoning([result.intent_description]);
+    }
+
+    // Update Recommended Plans logic
+    if (result.recommended_plans && result.recommended_plans.length > 0) {
+      const plans = result.recommended_plans.map((plan, idx) => ({
+        id: idx,
+        name: plan.plan_name,
+        price: plan.monthly_fee.toLocaleString(),
+        rawPrice: plan.monthly_fee,
+        data: plan.data_limit,
+        selected: false
+      }));
+      setRecommendedPlans(plans);
+    }
+  }
+
   // 고객 메시지 클릭 핸들러
   const handleCustomerMessageClick = (messageContent) => {
     setTriggerMessage({ content: messageContent, timestamp: Date.now() })
   }
+
+  // [NEW] Handle Analysis Tag Click
+  const handleAnalysisTagClick = (messageId, e) => {
+    e.stopPropagation(); // prevent bubble click
+
+    if (selectedAnalysisId === messageId) {
+      // Deselect (Return to live mode)
+      setSelectedAnalysisId(null);
+      return;
+    }
+
+    const analysis = upsellHistory[messageId];
+    if (analysis) {
+      setSelectedAnalysisId(messageId);
+      updateRightPanel(analysis);
+      setRightPanelTab('intent');
+    }
+  };
 
   // Call Status Polling Function
   const pollCallStatus = async () => {
@@ -121,88 +204,6 @@ export default function AgentDashboard() {
     }
   }, [callStatus])
 
-  // [NEW] Helper to update Right Panel State
-  const updateRightPanel = (result) => {
-    // Update Intent logic
-    if (result.customer_intent) {
-      setCustomerIntent(result.customer_intent);
-    }
-
-    // Update Reasoning logic
-    if (result.reasoning_steps && result.reasoning_steps.length > 0) {
-      setAiReasoning(result.reasoning_steps);
-    } else if (result.upsell_reason) {
-      setAiReasoning([result.upsell_reason]);
-    } else if (result.intent_description) {
-      setAiReasoning([result.intent_description]);
-    }
-
-    // Update Recommended Plans logic
-    if (result.recommended_plans && result.recommended_plans.length > 0) {
-      const plans = result.recommended_plans.map((plan, idx) => ({
-        id: idx,
-        name: plan.plan_name,
-        price: plan.monthly_fee.toLocaleString(),
-        rawPrice: plan.monthly_fee,
-        data: plan.data_limit,
-        selected: false
-      }));
-      setRecommendedPlans(plans);
-    }
-  }
-
-  // 추천 요금제 (AI가 분석해서 제공)
-  const [recommendedPlans, setRecommendedPlans] = useState([])
-
-  // AI 분석/사고 과정
-  const [aiReasoning, setAiReasoning] = useState([])
-  const [isAnalyzingIntent, setIsAnalyzingIntent] = useState(false)
-
-  // RAG Scripts State (Lifted from RAGAssistant)
-  const [ragScripts, setRagScripts] = useState([])
-
-  // 선택된 요금제에 대한 추천 스크립트
-  const [planScript, setPlanScript] = useState('')
-  const [scriptLoading, setScriptLoading] = useState(false)
-
-  // 고객 의중 (AI 분석 결과)
-  const [customerIntent, setCustomerIntent] = useState('대화 내용 분석 대기 중...')
-
-  // [NEW] Upsell Analysis History & Selection
-  const [upsellHistory, setUpsellHistory] = useState({}); // { messageId: AnalysisResult }
-  const [selectedAnalysisId, setSelectedAnalysisId] = useState(null);
-  const [analyzingMessages, setAnalyzingMessages] = useState(new Set()); // [NEW] Track messages being analyzed
-
-  // [NEW] Handle Analysis Tag Click
-  const handleAnalysisTagClick = (messageId, e) => {
-    e.stopPropagation(); // prevent bubble click
-
-    if (selectedAnalysisId === messageId) {
-      // Deselect (Return to live mode)
-      setSelectedAnalysisId(null);
-      return;
-    }
-
-    const analysis = upsellHistory[messageId];
-    if (analysis) {
-      setSelectedAnalysisId(messageId);
-      updateRightPanel(analysis);
-      setRightPanelTab('intent');
-    }
-  };
-
-  const [sampleList] = useState([
-    { id: 0, title: '인터넷 장애 - 긴급 문의' },
-    { id: 1, title: '통화품질 불량 - 유심 교체' },
-    { id: 2, title: '요금제 변경 - 데이터 절약' },
-    { id: 3, title: '청구서 이상 - 부가서비스 항의' },
-    { id: 4, title: '기기 변경 - 아이폰 구매' },
-    { id: 5, title: '데이터 차단 - 추가 구매' },
-    { id: 6, title: '해외 로밍 - 일본 여행' },
-    { id: 7, title: '명의 도용 오해 - 미납 발견' },
-    { id: 8, title: '5G 커버리지 불만' },
-    { id: 9, title: '어르신 요금제 - 효도 상담' }
-  ])
 
   useEffect(() => {
     loadReports()
@@ -853,17 +854,29 @@ export default function AgentDashboard() {
                           {/* [NEW] Analysis Tag (Only for User messages) */}
                           {msg.role === 'user' && msg.messageId && (
                             <div
-                              className={`analysis-tag ${analysis ? analysis.upsell_possibility : 'analyzing'
+                              className={`analysis-tag ${analysis
+                                ? (analysis.status === 'filtered' ? 'filtered' : analysis.upsell_possibility)
+                                : 'analyzing'
                                 } ${isSelected ? 'selected' : ''}`}
-                              onClick={analysis ? (e) => handleAnalysisTagClick(msg.messageId, e) : undefined}
-                              title={analysis ? "AI 분석 결과 보기" : "분석 중..."}
-                              style={{ cursor: analysis ? 'pointer' : 'default' }}
+                              onClick={analysis && analysis.status !== 'filtered' ? (e) => handleAnalysisTagClick(msg.messageId, e) : undefined}
+                              title={
+                                analysis
+                                  ? (analysis.status === 'filtered' ? `분석 제외됨` : "AI 분석 결과 보기")
+                                  : "분석 중..."
+                              }
+                              style={{ cursor: (analysis && analysis.status !== 'filtered') ? 'pointer' : 'default' }}
                             >
                               <span className="material-icons-outlined tag-icon">
-                                {analysis ? 'analytics' : 'hourglass_empty'}
+                                {analysis
+                                  ? (analysis.status === 'filtered' ? 'block' : 'analytics')
+                                  : 'hourglass_empty'
+                                }
                               </span>
                               <span className="tag-label">
-                                {analysis ? '분석 완료' : '분석중'}
+                                {analysis
+                                  ? (analysis.status === 'filtered' ? '제외됨' : '분석 완료')
+                                  : '분석중'
+                                }
                               </span>
                               {isSelected && <span className="material-icons-outlined tag-check">check</span>}
                             </div>
