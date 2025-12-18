@@ -1,42 +1,82 @@
 [
   {
     "role": "user",
-    "content": "Hi, I need help with my account login. I can't access my dashboard."
+    "content": "Hi, I need help with my account login. I can't access my dashboard.",
+    "keywords": [
+      "Hi,",
+      "need"
+    ]
   },
   {
     "role": "assistant",
-    "content": "I'm sorry to hear that! Let me help you troubleshoot. Are you seeing any error messages when you try to log in?"
+    "content": "I'm sorry to hear that! Let me help you troubleshoot. Are you seeing any error messages when you try to log in?",
+    "keywords": [
+      "sorry",
+      "I'm"
+    ]
   },
   {
     "role": "user",
-    "content": "Yes, it says 'Invalid credentials' even though I'm sure my password is correct."
+    "content": "Yes, it says 'Invalid credentials' even though I'm sure my password is correct.",
+    "keywords": [
+      "Yes,",
+      "says"
+    ]
   },
   {
     "role": "assistant",
-    "content": "That's frustrating. Let's try a few things: 1) Make sure Caps Lock is off, 2) Try clearing your browser cache and cookies, 3) If that doesn't work, we can reset your password. Would you like me to send a password reset link to your email?"
+    "content": "That's frustrating. Let's try a few things: 1) Make sure Caps Lock is off, 2) Try clearing your browser cache and cookies, 3) If that doesn't work, we can reset your password. Would you like me to send a password reset link to your email?",
+    "keywords": [
+      "That's",
+      "frustrating."
+    ]
   },
   {
     "role": "user",
-    "content": "I tried clearing the cache but it still doesn't work. Yes, please send the reset link."
+    "content": "I tried clearing the cache but it still doesn't work. Yes, please send the reset link.",
+    "keywords": [
+      "tried",
+      "clearing"
+    ]
   },
   {
     "role": "assistant",
-    "content": "I've sent a password reset link to the email address associated with your account (ending in ...@gmail.com). Please check your inbox and spam folder. The link will expire in 1 hour. Let me know once you've reset it!"
+    "content": "I've sent a password reset link to the email address associated with your account (ending in ...@gmail.com). Please check your inbox and spam folder. The link will expire in 1 hour. Let me know once you've reset it!",
+    "keywords": [
+      "I've",
+      "sent"
+    ]
   },
   {
     "role": "user",
-    "content": "Got it! I reset my password and now I can log in. Thank you so much!"
+    "content": "Got it! I reset my password and now I can log in. Thank you so much!",
+    "keywords": [
+      "it!",
+      "Got"
+    ]
   },
   {
     "role": "assistant",
-    "content": "Excellent! I'm glad we could resolve this quickly. For future security, I recommend using a password manager and enabling two-factor authentication in your account settings. Is there anything else I can help you with today?"
+    "content": "Excellent! I'm glad we could resolve this quickly. For future security, I recommend using a password manager and enabling two-factor authentication in your account settings. Is there anything else I can help you with today?",
+    "keywords": [
+      "Excellent!",
+      "I'm"
+    ]
   },
   {
     "role": "user",
-    "content": "No, that's all. Thanks again for your help!"
+    "content": "No, that's all. Thanks again for your help!",
+    "keywords": [
+      "that's",
+      "No,"
+    ]
   },
   {
     "role": "assistant",
-    "content": "You're very welcome! If you need any assistance in the future, don't hesitate to reach out. Have a great day!"
+    "content": "You're very welcome! If you need any assistance in the future, don't hesitate to reach out. Have a great day!",
+    "keywords": [
+      "very",
+      "You're"
+    ]
   }
 ]
